@@ -1,0 +1,9 @@
+# Local config (copy from .env.dist) and the box-local operator manual.
+.env
+
+# Build output
+/docshot
+.DS_Store
+
+# Global gitignores may drop *.mod
+!go.mod

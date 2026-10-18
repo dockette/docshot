@@ -1,0 +1,5 @@
+# apt packages track the pinned Gotenberg base image's Debian release; pinning
+# each package version would break on every upstream security update.
+ignored:
+  - DL3008
+failure-threshold: warning

@@ -1,0 +1,121 @@
+name: Docker
+
+on:
+  workflow_dispatch:
+
+  push:
+    branches: [master]
+
+  pull_request:
+
+  schedule:
+    - cron: "0 8 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Lint & unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: gofmt
+        run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+
+      - name: go vet
+        run: go vet -tags nodynamic ./...
+
+      - name: go test
+        run: go test -tags nodynamic -race ./...
+
+      - name: staticcheck
+        uses: dominikh/staticcheck-action@v1
+        with:
+          install-go: false
+          build-tags: nodynamic
+          # v0.8.1 (latest release) can't read go1.27.2 export data; pinned to
+          # a master commit verified against go1.27.2 (same as dockette/viewdoc).
+          version: "452d5bb86b45"
+
+      - name: govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@latest -tags nodynamic ./...
+
+      - name: shellcheck
+        run: shellcheck -S warning docshot.sh test/formats/gen.sh
+
+      - name: hadolint
+        run: docker run --rm -i -v "$PWD/.hadolint.yaml:/.config/hadolint.yaml:ro" hadolint/hadolint < Dockerfile
+
+  smoke:
+    name: Smoke test
+    needs: lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          load: true
+          tags: dockette/docshot:test
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Render a page
+        run: make smoke DOCKER_IMAGE=dockette/docshot:test
+
+  docker:
+    name: Docker (dockette/docshot:latest)
+    needs: smoke
+    if: github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Login to DockerHub
+        uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build and push
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: Dockerfile
+          push: true
+          tags: dockette/docshot:latest
+          platforms: linux/amd64,linux/arm64
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            VERSION=${{ github.sha }}
+
+  docs:
+    name: Docs
+    needs: docker
+    if: github.ref == 'refs/heads/master'
+    uses: dockette/.github/.github/workflows/dockerhub-description.yml@master
+    secrets: inherit
+    with:
+      image: "dockette/docshot"

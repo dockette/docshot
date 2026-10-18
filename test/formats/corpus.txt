@@ -1,0 +1,40 @@
+# Samples for formats nothing in the image can write: URL → local name.
+# LibreOffice's import-filter test corpus (CVE-*/EDB-* exploit reproducers deliberately not used).
+https://raw.githubusercontent.com/LibreOffice/core/master/writerperfect/qa/unit/data/writer/libabw/pass/hello.abw x.abw
+https://raw.githubusercontent.com/LibreOffice/core/master/writerperfect/qa/unit/data/writer/libabw/pass/hello.zabw x.zabw
+https://raw.githubusercontent.com/LibreOffice/core/master/writerperfect/qa/unit/data/writer/libetonyek/pass/Pages_5.pages x.pages
+https://raw.githubusercontent.com/LibreOffice/core/master/writerperfect/qa/unit/data/writer/libmwaw/pass/ClarisWorks_6.0.cwk x.cwk
+https://raw.githubusercontent.com/LibreOffice/core/master/writerperfect/qa/unit/data/writer/libmwaw/pass/MacWrite_Pro1.0 x.mw
+https://raw.githubusercontent.com/LibreOffice/core/master/writerperfect/qa/unit/data/writer/libstaroffice/pass/Writer_3.1.sdw x.sdw
+https://raw.githubusercontent.com/LibreOffice/core/master/writerperfect/qa/unit/data/writer/libwpd/pass/WP6.wpd x.wpd
+https://raw.githubusercontent.com/LibreOffice/core/master/writerperfect/qa/unit/data/writer/libwps/pass/PocketWord.psw x.psw
+https://raw.githubusercontent.com/LibreOffice/core/master/writerperfect/qa/unit/data/writer/libwps/pass/Works_4.5.wps x.wps
+https://raw.githubusercontent.com/LibreOffice/core/master/writerperfect/qa/unit/data/writer/libe-book/pass/FictionBook2.fb2 x.fb2
+https://raw.githubusercontent.com/LibreOffice/core/master/writerperfect/qa/unit/data/writer/libe-book/pass/PalmDOC.pdb x.pdb
+https://raw.githubusercontent.com/LibreOffice/core/master/writerperfect/qa/unit/data/draw/libcdr-cmx/pass/fdo63782-1.cmx x.cmx
+https://raw.githubusercontent.com/LibreOffice/core/master/writerperfect/qa/unit/data/draw/libcdr/pass/fdo65220-2.cdr x.cdr
+https://raw.githubusercontent.com/LibreOffice/core/master/writerperfect/qa/unit/data/draw/libmspub/pass/fdo59355-1.pub x.pub
+https://raw.githubusercontent.com/LibreOffice/core/master/writerperfect/qa/unit/data/draw/libvisio/pass/fdo57117-1.vsd x.vsd
+https://raw.githubusercontent.com/LibreOffice/core/master/writerperfect/qa/unit/data/draw/libvisio/pass/Visio2013drawing.vsdx x.vsdx
+https://raw.githubusercontent.com/LibreOffice/core/master/writerperfect/qa/unit/data/draw/libvisio/pass/Visio2013template.vstx x.vstx
+https://raw.githubusercontent.com/LibreOffice/core/master/writerperfect/qa/unit/data/draw/libwpg/pass/WPG1.wpg x.wpg
+https://raw.githubusercontent.com/LibreOffice/core/master/writerperfect/qa/unit/data/draw/libstaroffice/pass/Draw_3.1.sda x.sda
+https://raw.githubusercontent.com/LibreOffice/core/master/writerperfect/qa/unit/data/draw/libpagemaker/pass/shapes.pmd x.pmd
+https://raw.githubusercontent.com/LibreOffice/core/master/writerperfect/qa/unit/data/calc/libetonyek/pass/Numbers_2.numbers x.numbers
+https://raw.githubusercontent.com/LibreOffice/core/master/writerperfect/qa/unit/data/calc/libwps/pass/Lotus.wk1 x.wk1
+https://raw.githubusercontent.com/LibreOffice/core/master/writerperfect/qa/unit/data/calc/libwps/pass/Lotus123_98.123 x.123
+https://raw.githubusercontent.com/LibreOffice/core/master/writerperfect/qa/unit/data/calc/libwps/pass/Works_2.0.wks x.wks
+https://raw.githubusercontent.com/LibreOffice/core/master/writerperfect/qa/unit/data/calc/libstaroffice/pass/Calc_3.1.sdc x.sdc
+https://raw.githubusercontent.com/LibreOffice/core/master/writerperfect/qa/unit/data/impress/libetonyek/pass/Keynote_6.key x.key
+# Outlook messages (Email::Outlook::Message test suite)
+https://raw.githubusercontent.com/mvz/email-outlook-message-perl/master/t/files/plain_jpeg_attached.msg x.msg
+https://raw.githubusercontent.com/mvz/email-outlook-message-perl/master/t/files/charset.msg charset.msg
+# RAR 4 and 5 (libarchive test suite, uuencoded — fixtures.py decodes *.uu)
+https://raw.githubusercontent.com/libarchive/libarchive/master/libarchive/test/test_read_format_rar.rar.uu x.rar.uu
+https://raw.githubusercontent.com/libarchive/libarchive/master/libarchive/test/test_read_format_rar5_stored.rar.uu x5.rar.uu
+# Photos and fonts
+https://github.com/strukturag/libheif/raw/master/examples/example.heic x.heic
+https://raw.githubusercontent.com/psd-tools/psd-tools/main/tests/psd_files/colormodes/4x4_8bit_rgb.psd x.psd
+https://www.rawsamples.ch/raws/nikon/d40/RAW_NIKON_D40_SRGB.NEF x.nef
+https://cdn.jsdelivr.net/npm/@fontsource/inter@5.0.0/files/inter-latin-400-normal.woff x.woff
+https://cdn.jsdelivr.net/npm/@fontsource/inter@5.0.0/files/inter-latin-400-normal.woff2 x.woff2

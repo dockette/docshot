@@ -1,0 +1,48 @@
+name: docshot
+
+services:
+  docshot:
+    # Gotenberg + docshot in one container; network isolation uses Gotenberg's --*-deny-*-ips flags (see Dockerfile CMD).
+    build:
+      context: .
+      args:
+        VERSION: "0.1.0"
+        GOTENBERG_VERSION: "8.37"
+    image: docshot:0.1.0
+    container_name: docshot
+    restart: unless-stopped
+    ports:
+      - "9994:3000"
+    environment:
+      - DOCSHOT_DEFAULT_DPI=${DOCSHOT_DEFAULT_DPI:-150}
+      - DOCSHOT_MAX_SIDE=${DOCSHOT_MAX_SIDE:-10000}
+      - DOCSHOT_MAX_PIXELS=${DOCSHOT_MAX_PIXELS:-40000000}
+      - DOCSHOT_MAX_BYTES=${DOCSHOT_MAX_BYTES:-104857600}
+      - DOCSHOT_TIMEOUT_SECONDS=${DOCSHOT_TIMEOUT_SECONDS:-180}
+      - DOCSHOT_PDFIUM_WORKERS=${DOCSHOT_PDFIUM_WORKERS:-4}
+      - DOCSHOT_CACHE_MB=${DOCSHOT_CACHE_MB:-256}
+      - DOCSHOT_MAX_AGE=${DOCSHOT_MAX_AGE:-3600}
+      # GET /render sources for <img src=…> previews — all off unless set.
+      # ?path=  : mount a directory below and point DOCSHOT_ROOT at it.
+      - DOCSHOT_ROOT=${DOCSHOT_ROOT:-}
+      # ?s3=bucket/key as a source, and ?store=s3[:append|replace|suffix|hash]
+      # to keep results in S3 (next to an S3 source; else in DOCSHOT_STORE_BUCKET).
+      - DOCSHOT_S3_ENDPOINT=${DOCSHOT_S3_ENDPOINT:-}
+      - DOCSHOT_S3_ACCESS_KEY=${DOCSHOT_S3_ACCESS_KEY:-}
+      - DOCSHOT_S3_SECRET_KEY=${DOCSHOT_S3_SECRET_KEY:-}
+      - DOCSHOT_S3_REGION=${DOCSHOT_S3_REGION:-}
+      - DOCSHOT_S3_SSL=${DOCSHOT_S3_SSL:-true}
+      - DOCSHOT_S3_BUCKETS=${DOCSHOT_S3_BUCKETS:-}
+      - DOCSHOT_STORE_BUCKET=${DOCSHOT_STORE_BUCKET:-}
+      - DOCSHOT_STORE_PREFIX=${DOCSHOT_STORE_PREFIX:-docshot/}
+      - DOCSHOT_STORE_STRATEGY=${DOCSHOT_STORE_STRATEGY:-append}
+      # ?url= : regexp of URLs allowed to be fetched (SSRF guard). Empty = off.
+      - DOCSHOT_FETCH_ALLOW=${DOCSHOT_FETCH_ALLOW:-}
+      - TZ=${TZ:-UTC}
+    # volumes:
+    #   - /path/to/documents:/data:ro   # + DOCSHOT_ROOT=/data
+    deploy:
+      resources:
+        limits:
+          cpus: "${DOCSHOT_CPUS:-4.0}"
+          memory: ${DOCSHOT_MEMORY:-4g}
