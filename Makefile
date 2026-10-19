@@ -2,12 +2,13 @@
 # Override COMPOSE if your user needs sudo: make up COMPOSE="sudo docker compose"
 COMPOSE ?= docker compose
 DOCKER_IMAGE ?= dockette/docshot:latest
+VERSION := $(shell cat VERSION)
 
 .DEFAULT_GOAL := up
-.PHONY: test-formats build run up down restart logs ps validate test test-params test-all formats test-unit lint smoke
+.PHONY: test-formats build run up down restart logs ps validate test test-params test-all formats test-unit lint smoke version release
 
 build:            ## Build the public image (docker buildx)
-	docker buildx build -t ${DOCKER_IMAGE} .
+	docker buildx build --build-arg VERSION=$(VERSION) -t ${DOCKER_IMAGE} .
 
 run:              ## Run the public image on :3000
 	docker run -it --rm -p 3000:3000 ${DOCKER_IMAGE}
@@ -29,8 +30,22 @@ smoke:            ## Start the public image, wait for /readyz, render Markdown t
 	ct=$$(printf '# docshot\n\nsmoke test\n' | curl -sS -m 120 -o /dev/null -w '%{http_code} %{content_type}' --data-binary @- 'http://localhost:39994/upload?name=smoke.md'); \
 	docker rm -f docshot-smoke >/dev/null; echo "smoke: $$ct"; [ "$$ct" = "200 image/png" ]
 
+version:          ## Print VERSION
+	@echo $(VERSION)
+
+# Sets VERSION to today's date (UTC), YYYY.MM.DD — or YYYY.MM.DD.N when that
+# date is already released (tagged). Commit and push to master to publish:
+# CI then pushes the <VERSION> image and creates the GitHub release.
+release:          ## Set VERSION to today's date (see README → Versions)
+	@git fetch -q --tags origin 2>/dev/null || true; \
+	v=$$(date -u +%Y.%m.%d); n=0; \
+	while git rev-parse -q --verify "refs/tags/$$v" >/dev/null; do n=$$((n+1)); v=$$(date -u +%Y.%m.%d).$$n; done; \
+	echo "$$v" > VERSION; \
+	echo "VERSION: $(VERSION) -> $$v"; \
+	echo "next: git commit -am 'release: $$v' && git push"
+
 up:               ## Build (if needed) + start docshot (Gotenberg inside)
-	$(COMPOSE) up -d --build
+	DOCSHOT_VERSION=$(VERSION) $(COMPOSE) up -d --build
 	@echo "[docshot] REST -> http://localhost:9994  (POST /upload, GET /render, /info, /readyz, /metrics)"
 
 down:             ## Stop
@@ -64,6 +79,6 @@ test-formats:     ## Every extension: generate/download samples, render, OCR-che
 	@OUT=$${OUT:-/tmp/docshot-formats}; FIX=$${FIXTURES:-$(CURDIR)/../tika/fixtures}; \
 	rm -rf $$OUT && mkdir -p $$OUT/gen/in $$OUT/gen/out $$OUT/corpus $$OUT/png && chmod -R 777 $$OUT && \
 	cp $$FIX/report.docx $$FIX/sheet.xlsx $$FIX/deck.pptx $$FIX/invoice.png $$FIX/sample.eml $$FIX/notes.epub $$FIX/sample.tar.gz $$FIX/sample.jar $$FIX/page.html $$OUT/gen/in/ && \
-	cp test/formats/gen.sh $$OUT/gen/ && docker run --rm --network none --entrypoint sh -v $$OUT/gen:/w $${IMAGE:-docshot:0.1.0} /w/gen.sh >/dev/null 2>&1; \
+	cp test/formats/gen.sh $$OUT/gen/ && docker run --rm --network none --entrypoint sh -v $$OUT/gen:/w $${IMAGE:-docshot:$(VERSION)} /w/gen.sh >/dev/null 2>&1; \
 	grep -v '^#' test/formats/corpus.txt | while read u n; do [ -n "$$u" ] && curl -sfL --max-time 120 -o $$OUT/corpus/$$n "$$u"; done; \
 	python3 test/formats/fixtures.py $$OUT && python3 test/formats/run.py $$OUT

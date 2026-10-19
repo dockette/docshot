@@ -6,9 +6,10 @@ services:
     build:
       context: .
       args:
-        VERSION: "0.1.0"
+        # make up stamps VERSION; a plain docker compose build stamps dev.
+        VERSION: ${DOCSHOT_VERSION:-dev}
         GOTENBERG_VERSION: "8.37"
-    image: docshot:0.1.0
+    image: docshot:${DOCSHOT_VERSION:-dev}
     container_name: docshot
     restart: unless-stopped
     ports:

@@ -19,7 +19,7 @@ import (
 	"github.com/dockette/docshot/internal/supervisor"
 )
 
-var version = "dev" // set with -ldflags "-X main.version=..."
+var version = "dev" // release from VERSION (YYYY.MM.DD[.N]), set with -ldflags "-X main.version=..."
 
 func main() {
 	healthcheck := flag.Bool("healthcheck", false, "probe /health on the local listener and exit (for Docker HEALTHCHECK; the image has no shell)")

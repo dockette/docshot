@@ -196,7 +196,7 @@ the source is unchanged:
 | `/healthz` | Liveness |
 | `/readyz` | JSON readiness: Gotenberg and PDFium (503 when not ready) |
 | `/metrics` | Prometheus: requests by cache layer, errors, conversions and renders with timings, queue, cache bytes, Gotenberg restarts, Go runtime |
-| `/version` | JSON |
+| `/version` | JSON: `name` and `version` (see [Versions](#versions)) |
 | `/formats` | Every extension and its engine |
 
 ## Configuration
@@ -247,16 +247,39 @@ the source is unchanged:
   fails becomes a placeholder, so one broken file does not sink the grid.
 - Source images over 3× `DOCSHOT_MAX_PIXELS` (120 MP) are a `422`, a decompression-bomb guard.
 
+## Versions
+
+docshot is versioned by release date: `YYYY.MM.DD`, or `YYYY.MM.DD.N` for another release
+on the same day. The current version is in [`VERSION`](VERSION). It is built into the
+binary (logged at startup, returned by `/version` and `/readyz`) and set as the
+`org.opencontainers.image.version` label.
+
+| Image tag | Meaning |
+|-----------|---------|
+| `dockette/docshot:latest` | latest `master` build |
+| `dockette/docshot:2026.10.19` | release `2026.10.19` — pin this |
+| `dockette/docshot:sha-<short-sha>` | immutable build of that commit |
+
+Like other dockette images, release tags are rebuilt by the weekly schedule to pick up
+Gotenberg and Debian updates; use the `sha-<short-sha>` tag for a byte-identical image.
+
+To release: `make release` sets `VERSION` to today's date (UTC; `.1`, `.2`, … if that date
+is already tagged), then commit and push to `master`. Once the image is pushed, CI tags the
+commit and creates the GitHub release `<VERSION>` with generated notes. A plain
+`docker compose build` stamps `dev`; `make build` and `make up` use `VERSION`.
+
 ## Development
 
 ```
-make build          # docker buildx build -t dockette/docshot:latest .
+make build          # docker buildx build -t dockette/docshot:latest ., stamped with VERSION
 make up             # compose: build + start
 make test-unit      # go vet + unit tests (Linux-only code, runs in a golang container)
 make lint           # gofmt, staticcheck, govulncheck, shellcheck, hadolint
 make smoke          # start the built image and render one page
 make test           # API checks + fixtures, OCR-verified
 make test-formats   # every format: generates/downloads ~230 files, renders and OCR-checks them
+make version        # print VERSION
+make release        # set VERSION to today's date (see Versions)
 ```
 
 See [how to contribute](https://contributte.org/contributing.html) to this package.

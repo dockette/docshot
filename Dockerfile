@@ -20,6 +20,8 @@ RUN apt-get update \
  && lib="$(dirname /usr/lib/*-linux-gnu/libwebp.so.7)" \
  && ln -sf libwebp.so.7 "$lib/libwebp.so" && ln -sf libwebpdemux.so.2 "$lib/libwebpdemux.so"
 COPY --from=build /docshot /usr/bin/docshot
+ARG VERSION=dev
+LABEL org.opencontainers.image.version=$VERSION
 USER gotenberg
 EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 CMD ["/usr/bin/docshot", "-healthcheck"]
