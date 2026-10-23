@@ -38,6 +38,9 @@ var statusCodes = map[int]string{
 	http.StatusInternalServerError:          "internal",
 }
 
+// CodeOf is the default code of a status.
+func CodeOf(status int) string { return cmp.Or(statusCodes[status], "error") }
+
 // Write sends err as uncached JSON {"error", "code", "status"}.
 func Write(w http.ResponseWriter, err error) {
 	status, code := http.StatusInternalServerError, ""
@@ -46,7 +49,7 @@ func Write(w http.ResponseWriter, err error) {
 		status, code = he.Status, he.Code
 	}
 	if code == "" {
-		code = cmp.Or(statusCodes[status], "error")
+		code = CodeOf(status)
 	}
 	h := w.Header()
 	h.Set("Content-Type", "application/json")

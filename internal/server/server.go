@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"mime"
 	"net/http"
 	"net/url"
@@ -15,13 +16,19 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/dockette/docshot/internal/apierr"
 	"github.com/dockette/docshot/internal/detect"
+	"github.com/dockette/docshot/internal/diskcache"
 	"github.com/dockette/docshot/internal/imaging"
+	"github.com/dockette/docshot/internal/metrics"
 	"github.com/dockette/docshot/internal/render"
 	"github.com/minio/minio-go/v7"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"golang.org/x/sync/singleflight"
 )
 
 // Config holds the settings loaded from the environment.
@@ -37,13 +44,21 @@ type Config struct {
 	root         string         // DOCSHOT_ROOT: ?path= is confined to this directory
 	fetchAllow   *regexp.Regexp // DOCSHOT_FETCH_ALLOW: ?url= must match
 	cacheMB      int
-	cacheControl string
-	s3Endpoint   string
-	s3AccessKey  string
-	s3SecretKey  string
-	s3Region     string
-	s3SSL        bool
-	s3Buckets    map[string]bool
+	cacheControl string // DOCSHOT_CACHE_CONTROL, or built from DOCSHOT_MAX_AGE
+	cdnMaxAge    int    // DOCSHOT_CDN_MAX_AGE: CDN-Cache-Control (RFC 9213); 0 = not sent
+
+	cacheDir    string        // DOCSHOT_CACHE_DIR: rendered results on disk; "" = off
+	cacheSize   int64         // DOCSHOT_CACHE_SIZE: LRU limit of the disk cache
+	cacheTTL    time.Duration // DOCSHOT_CACHE_TTL: re-check the source after this; 0 = never
+	cacheStale  bool          // DOCSHOT_CACHE_STALE: past TTL, answer stale and re-check in the background
+	cacheBuster string        // DOCSHOT_CACHE_BUSTER: part of every cache key and ETag
+	cacheTags   bool          // DOCSHOT_CACHE_TAGS: Surrogate-Key / Cache-Tag per source
+	s3Endpoint  string
+	s3AccessKey string
+	s3SecretKey string
+	s3Region    string
+	s3SSL       bool
+	s3Buckets   map[string]bool
 
 	storeBucket   string
 	storePrefix   string
@@ -75,17 +90,22 @@ func envInt(key string, def int) int {
 
 func LoadConfig() (Config, error) {
 	cfg := Config{
-		Listen:        env("DOCSHOT_LISTEN", ":3000"), // Gotenberg's port: drop-in for its clients
-		GotenbergURL:  strings.TrimRight(env("GOTENBERG_URL", "http://gotenberg:3000"), "/"),
-		maxBytes:      int64(envInt("DOCSHOT_MAX_BYTES", 100<<20)),
-		defaultDPI:    envInt("DOCSHOT_DEFAULT_DPI", 150),
-		maxSide:       envInt("DOCSHOT_MAX_SIDE", 10000),
-		Timeout:       time.Duration(envInt("DOCSHOT_TIMEOUT_SECONDS", 180)) * time.Second,
-		workers:       envInt("DOCSHOT_PDFIUM_WORKERS", 4),
-		root:          os.Getenv("DOCSHOT_ROOT"),
-		fetchAllow:    compileAllow(os.Getenv("DOCSHOT_FETCH_ALLOW")),
-		cacheMB:       envInt("DOCSHOT_CACHE_MB", 256),
-		cacheControl:  "public, max-age=" + strconv.Itoa(envInt("DOCSHOT_MAX_AGE", 3600)),
+		Listen:       env("DOCSHOT_LISTEN", ":3000"), // Gotenberg's port: drop-in for its clients
+		GotenbergURL: strings.TrimRight(env("GOTENBERG_URL", "http://gotenberg:3000"), "/"),
+		maxBytes:     int64(envInt("DOCSHOT_MAX_BYTES", 100<<20)),
+		defaultDPI:   envInt("DOCSHOT_DEFAULT_DPI", 150),
+		maxSide:      envInt("DOCSHOT_MAX_SIDE", 10000),
+		Timeout:      time.Duration(envInt("DOCSHOT_TIMEOUT_SECONDS", 180)) * time.Second,
+		workers:      envInt("DOCSHOT_PDFIUM_WORKERS", 4),
+		root:         os.Getenv("DOCSHOT_ROOT"),
+		fetchAllow:   compileAllow(os.Getenv("DOCSHOT_FETCH_ALLOW")),
+		cacheMB:      envInt("DOCSHOT_CACHE_MB", 256),
+		cacheControl: env("DOCSHOT_CACHE_CONTROL", "public, max-age="+strconv.Itoa(envInt("DOCSHOT_MAX_AGE", 3600))+
+			", stale-while-revalidate=86400, stale-if-error=604800"),
+		cdnMaxAge:     envInt("DOCSHOT_CDN_MAX_AGE", 0),
+		cacheStale:    os.Getenv("DOCSHOT_CACHE_STALE") != "false",
+		cacheBuster:   os.Getenv("DOCSHOT_CACHE_BUSTER"),
+		cacheTags:     os.Getenv("DOCSHOT_CACHE_TAGS") == "true",
 		s3Endpoint:    os.Getenv("DOCSHOT_S3_ENDPOINT"),
 		s3AccessKey:   os.Getenv("DOCSHOT_S3_ACCESS_KEY"),
 		s3SecretKey:   os.Getenv("DOCSHOT_S3_SECRET_KEY"),
@@ -101,6 +121,17 @@ func LoadConfig() (Config, error) {
 		concurrency:   envInt("DOCSHOT_CONCURRENCY", runtime.NumCPU()),
 		queue:         envInt("DOCSHOT_QUEUE", 64),
 		maxPixels:     int64(envInt("DOCSHOT_MAX_PIXELS", 0)),
+	}
+	cfg.cacheDir = "/tmp/docshot"
+	if v, ok := os.LookupEnv("DOCSHOT_CACHE_DIR"); ok {
+		cfg.cacheDir = v // set but empty: off
+	}
+	var err error
+	if cfg.cacheSize, err = parseSize(env("DOCSHOT_CACHE_SIZE", "10GB")); err != nil {
+		return cfg, fmt.Errorf("DOCSHOT_CACHE_SIZE: %w", err)
+	}
+	if cfg.cacheTTL, err = parseTTL(env("DOCSHOT_CACHE_TTL", "0")); err != nil {
+		return cfg, fmt.Errorf("DOCSHOT_CACHE_TTL: %w", err)
 	}
 	presets, err := parsePresets(os.Getenv("DOCSHOT_PRESETS"))
 	if err != nil {
@@ -123,12 +154,30 @@ func New(cfg Config) (*Server, error) {
 		r.Close()
 		return nil, fmt.Errorf("s3: %w", err)
 	}
-	rc := render.Config{GotenbergURL: cfg.GotenbergURL, MaxBytes: cfg.maxBytes, MaxSide: cfg.maxSide,
-		Timeout: cfg.Timeout, CacheMB: cfg.cacheMB, Concurrency: cfg.concurrency, Queue: cfg.queue}
-	return &Server{cfg: cfg, render: render.New(rc, r), s3: s3c}, nil
+	return newServer(cfg, r, s3c), nil
 }
 
-func (s *Server) Close() { s.render.Close() }
+func newServer(cfg Config, raster *imaging.Rasterizer, s3c *minio.Client) *Server {
+	rc := render.Config{GotenbergURL: cfg.GotenbergURL, MaxBytes: cfg.maxBytes, MaxSide: cfg.maxSide,
+		Timeout: cfg.Timeout, CacheMB: cfg.cacheMB, Concurrency: cfg.concurrency, Queue: cfg.queue}
+	s := &Server{cfg: cfg, render: render.New(rc, raster), s3: s3c}
+	if cfg.cacheDir != "" && cfg.cacheSize > 0 {
+		// A cache that cannot be written is not worth failing the service for.
+		var err error
+		if s.cache, err = diskcache.Open(cfg.cacheDir, cfg.cacheSize); err != nil {
+			slog.Warn("disk cache disabled", "dir", cfg.cacheDir, "err", err)
+			s.cache = nil
+		}
+	}
+	s.reg = metrics.NewRegistry(s.render.Collector(), cacheCollector{s}, buildInfo(cfg.Version))
+	return s
+}
+
+// Close waits for background revalidations, then stops the rasteriser.
+func (s *Server) Close() {
+	s.background.Wait()
+	s.render.Close()
+}
 
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
@@ -143,7 +192,8 @@ func (s *Server) Handler() http.Handler {
 	}
 	mux.HandleFunc("GET /info", s.handleInfo)
 	mux.HandleFunc("POST /upload/info", s.handleUploadInfo)
-	mux.HandleFunc("GET /metrics", s.handleMetrics)
+	mux.Handle("GET /metrics", promhttp.HandlerFor(s.reg, promhttp.HandlerOpts{Registry: s.reg}))
+	mux.HandleFunc("DELETE /cache", s.handlePurge)
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { fmt.Fprintln(w, "ok") })
 	mux.HandleFunc("GET /readyz", s.handleReady)
 	mux.HandleFunc("GET /version", func(w http.ResponseWriter, _ *http.Request) {
@@ -160,6 +210,7 @@ func (s *Server) Handler() http.Handler {
 	for _, p := range []string{"/render", "/render/grid", "/render/pages", "/info", "/healthz", "/readyz", "/metrics", "/version", "/formats"} {
 		allow[p] = "GET, HEAD"
 	}
+	allow["/cache"] = "DELETE"
 	for p, methods := range allow {
 		mux.HandleFunc(p, func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Allow", methods)
@@ -169,13 +220,18 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		apierr.Write(w, apierr.New(http.StatusNotFound, "no endpoint %s — POST /upload[/grid|/pages|/info], GET /render[/grid|/pages], /info, /formats, /readyz", r.URL.Path))
 	})
-	return mux
+	return instrument(s.reg, mux)
 }
 
 type Server struct {
 	cfg    Config
 	render *render.Renderer
-	s3     *minio.Client // nil unless DOCSHOT_S3_ENDPOINT is set
+	s3     *minio.Client    // nil unless DOCSHOT_S3_ENDPOINT is set
+	cache  *diskcache.Cache // nil unless DOCSHOT_CACHE_DIR is usable
+	reg    *prometheus.Registry
+
+	revalidating singleflight.Group // background re-checks of stale entries, one per key
+	background   sync.WaitGroup
 }
 
 func bucketSet(names []string) map[string]bool {
@@ -267,7 +323,7 @@ func (s *Server) readUpload(r *http.Request) (input, error) {
 	if len(body) == 0 {
 		return input{}, apierr.New(http.StatusBadRequest, "empty upload: curl -F file=@doc.pdf …/upload")
 	}
-	return input{name: name, load: func(context.Context) ([]byte, error) { return body, nil }}, nil
+	return input{name: name, source: "upload", load: func(context.Context) ([]byte, error) { return body, nil }}, nil
 }
 
 func (s *Server) handleUpload(op string) http.HandlerFunc {
@@ -294,15 +350,28 @@ func (s *Server) handleGet(op string) http.HandlerFunc {
 			apierr.Write(w, err)
 			return
 		}
+		q := r.URL.Query()
 		if err := s.checkSignature(r); err != nil {
-			s.fail(w, err, "", opts)
+			s.fail(w, err, "", sourceKind(q), opts)
 			return
 		}
-		in, err := s.queryInput(r)
-		if err != nil {
-			s.fail(w, err, r.URL.Query().Get("path")+r.URL.Query().Get("s3")+r.URL.Query().Get("url"), opts)
+		// The disk cache is keyed by the request, so a hit costs no S3 or file access at all.
+		key, src := s.requestKey(q, opts)
+		var pre *input
+		if s.cache != nil && src != "" {
+			var done bool
+			if done, pre = s.fromCache(w, r, key, opts); done {
+				return
+			}
+		}
+		var in input
+		if pre != nil {
+			in = *pre
+		} else if in, err = s.queryInput(r); err != nil {
+			s.fail(w, err, q.Get("path")+q.Get("s3")+q.Get("url"), sourceKind(q), opts)
 			return
 		}
+		in.cacheKey, in.sourceID, in.cacheControl = key, src, s.cacheControlFor(q)
 		s.serve(w, r, in, opts)
 	}
 }
@@ -327,6 +396,7 @@ func (s *Server) queryInput(r *http.Request) (input, error) {
 	if err != nil {
 		return input{}, err
 	}
+	in.source = sourceKind(q)
 	if n := q.Get("name"); n != "" {
 		in.name = filepath.Base(n)
 	}

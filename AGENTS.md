@@ -20,7 +20,8 @@ Dockette Docshot builds `dockette/docshot`, an HTTP service that renders any doc
 - `internal/imaging` — geometry, trim, grid, encoding, PDFium rasterizer, page sequences, placeholder.
 - `internal/media` — ffmpeg/ffprobe (video, audio, exotic images), LibRaw, tiff2pdf/ddjvu/xpstopdf/dot.
 - `internal/htmlconv` — formats rendered as an HTML page: e-mail, Outlook msg, EPUB, CSV, JSON, notebooks, calendars, contacts, fonts, SVG, text.
-- `internal/apierr`, `internal/metrics`, `internal/lru`, `internal/supervisor` — JSON errors, Prometheus counters, byte-bounded LRU, child-process supervision.
+- `internal/diskcache` — byte-bounded LRU of rendered results on disk (`DOCSHOT_CACHE_DIR`), index rebuilt on start; `internal/server/cache.go` keys it by URL and handles ETag/TTL/purge.
+- `internal/apierr`, `internal/metrics`, `internal/lru`, `internal/supervisor` — JSON errors, Prometheus collectors (client_golang), byte-bounded LRU, child-process supervision.
 - GitHub Actions runs lint + unit tests, a smoke test of the built image, then publishes `linux/amd64,linux/arm64` on `master` and the weekly schedule, and creates a GitHub release when `VERSION` is new.
 
 ## Commands

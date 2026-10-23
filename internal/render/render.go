@@ -57,7 +57,11 @@ type Config struct {
 	Queue        int
 }
 
-func (r *Renderer) Close() { r.raster.Close() }
+func (r *Renderer) Close() {
+	if r.raster != nil {
+		r.raster.Close()
+	}
+}
 
 func New(cfg Config, raster *imaging.Rasterizer) *Renderer {
 	client := &http.Client{Timeout: cfg.Timeout}
@@ -116,8 +120,8 @@ func (r *Renderer) Render(content, name string, body []byte, o Options) (Result,
 
 		t0 := time.Now()
 		defer func() {
-			metrics.Inc("docshot_renders_total", "")
-			metrics.Add("docshot_render_seconds_total", "", time.Since(t0).Seconds())
+			metrics.Renders.WithLabelValues(o.Op, TypeLabel(doc.kind)).Inc()
+			metrics.RenderSeconds.WithLabelValues(o.Op).Observe(time.Since(t0).Seconds())
 		}()
 		res, err := r.produce(context.WithValue(work, slotHeld{}, true), doc, body, o)
 		if err != nil {
@@ -163,13 +167,14 @@ func (r *Renderer) document(ctx context.Context, content, name string, body []by
 			return docEntry{kind: detect.Kind{Ext: k.Ext, Route: detect.Image, Name: k.Name}, path: string(detect.Image)}, nil
 		}
 		if err != nil {
+			metrics.ConversionErrors.WithLabelValues(path, TypeLabel(k)).Inc()
 			return nil, err
 		}
 		took := time.Since(t0)
 		if k.Route != detect.PDF {
-			metrics.Inc("docshot_conversions_total", metrics.Label("route", path))
+			metrics.Conversions.WithLabelValues(path, TypeLabel(k)).Inc()
+			metrics.ConversionSeconds.WithLabelValues(path).Observe(took.Seconds())
 		}
-		metrics.Add("docshot_conversion_seconds_total", "", took.Seconds())
 		slog.Info("converted", "name", name, "kind", k.Ext, "path", path, "pdf_bytes", len(pdf), "ms", took.Milliseconds())
 		entry := docEntry{pdf: pdf, kind: k, path: path}
 		r.cache.docs.Put(docKey, entry)
@@ -182,3 +187,11 @@ func (r *Renderer) document(ctx context.Context, content, name string, body []by
 }
 
 type slotHeld struct{}
+
+// TypeLabel is the input type as a metric label: unrecognised extensions are "other", so uploads cannot grow the series set.
+func TypeLabel(k detect.Kind) string {
+	if k.Route == detect.Unknown || k.Ext == "" {
+		return "other"
+	}
+	return k.Ext
+}

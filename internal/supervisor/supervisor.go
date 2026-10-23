@@ -60,7 +60,7 @@ func (s *Supervisor) Run(ctx context.Context) {
 			case err := <-done:
 				_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 				n := killOrphans()
-				metrics.Inc("docshot_gotenberg_restarts_total", "")
+				metrics.GotenbergRestarts.Inc()
 				slog.Error("gotenberg exited, restarting", "err", err, "orphans_killed", n)
 			}
 		}
