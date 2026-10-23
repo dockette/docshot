@@ -53,9 +53,9 @@ func ProbeVideo(ctx context.Context, body []byte) (videoInfo, error) {
 }
 
 func probeFile(ctx context.Context, path string) (videoInfo, error) {
-	out, err := exec.CommandContext(ctx, "ffprobe", "-v", "error", "-protocol_whitelist", "file",
+	out, err := output(exec.CommandContext(ctx, "ffprobe", "-v", "error", "-protocol_whitelist", "file",
 		"-select_streams", "v:0", "-show_entries", "stream=codec_name,width,height,avg_frame_rate:format=duration",
-		"-of", "json", path).Output()
+		"-of", "json", path))
 	if err != nil {
 		return videoInfo{}, apierr.New(http.StatusUnprocessableEntity, "not a readable video: %v", ExitMsg(err))
 	}
@@ -111,11 +111,11 @@ func scanDuration(ctx context.Context, path string) float64 {
 
 // frameAt decodes one frame at t seconds; -ss before -i is the fast seek, still frame-exact.
 func frameAt(ctx context.Context, path string, t float64, maxW int) (image.Image, error) {
-	out, err := exec.CommandContext(ctx, "ffmpeg", "-nostdin", "-v", "error", "-protocol_whitelist", "file",
+	out, err := output(exec.CommandContext(ctx, "ffmpeg", "-nostdin", "-v", "error", "-protocol_whitelist", "file",
 		"-ss", strconv.FormatFloat(t, 'f', 3, 64), "-i", path,
 		"-frames:v", "1", "-an", "-sn", "-dn",
 		"-vf", fmt.Sprintf("scale='min(iw,%d)':-2", maxW),
-		"-f", "image2pipe", "-c:v", "png", "-").Output()
+		"-f", "image2pipe", "-c:v", "png", "-"))
 	if err != nil {
 		return nil, apierr.New(http.StatusUnprocessableEntity, "ffmpeg frame at %.2fs: %v", t, ExitMsg(err))
 	}
@@ -126,6 +126,30 @@ func frameAt(ctx context.Context, path string, t float64, maxW int) (image.Image
 }
 
 func decodePNG(b []byte) (image.Image, error) { return png.Decode(bytes.NewReader(b)) }
+
+// output is cmd.Output with stderr capped: on a corrupted file ffmpeg can log the same error at MB/s.
+func output(cmd *exec.Cmd) ([]byte, error) {
+	stderr := &headBuffer{max: 4 << 10}
+	cmd.Stderr = stderr
+	out, err := cmd.Output()
+	if ee, ok := err.(*exec.ExitError); ok {
+		ee.Stderr = stderr.Bytes()
+	}
+	return out, err
+}
+
+// headBuffer keeps the first max bytes written to it and drops the rest.
+type headBuffer struct {
+	bytes.Buffer
+	max int
+}
+
+func (b *headBuffer) Write(p []byte) (int, error) {
+	if room := b.max - b.Len(); room > 0 {
+		b.Buffer.Write(p[:min(len(p), room)])
+	}
+	return len(p), nil
+}
 
 func ExitMsg(err error) string {
 	if ee, ok := err.(*exec.ExitError); ok && len(ee.Stderr) > 0 {
@@ -205,8 +229,8 @@ func clock(t float64) string {
 func ffmpegImage(ctx context.Context, body []byte, ext string) (image.Image, error) {
 	var img image.Image
 	err := WithTempFile(body, ext, func(path string) error {
-		out, err := exec.CommandContext(ctx, "ffprobe", "-v", "error", "-protocol_whitelist", "file",
-			"-select_streams", "v:0", "-show_entries", "stream=width,height", "-of", "csv=p=0:s=x", path).Output()
+		out, err := output(exec.CommandContext(ctx, "ffprobe", "-v", "error", "-protocol_whitelist", "file",
+			"-select_streams", "v:0", "-show_entries", "stream=width,height", "-of", "csv=p=0:s=x", path))
 		if err != nil {
 			return apierr.New(http.StatusUnprocessableEntity, "not a readable image: %v", ExitMsg(err))
 		}
@@ -217,10 +241,13 @@ func ffmpegImage(ctx context.Context, body []byte, ext string) (image.Image, err
 		if w*h > 3*imaging.MaxPixels {
 			return apierr.New(http.StatusUnprocessableEntity, "image is %dx%d, over the %d pixel source limit", w, h, 3*imaging.MaxPixels)
 		}
-		png, err := exec.CommandContext(ctx, "ffmpeg", "-nostdin", "-v", "error", "-protocol_whitelist", "file",
-			"-i", path, "-frames:v", "1", "-f", "image2pipe", "-c:v", "png", "-").Output()
-		if err != nil || len(png) == 0 {
+		png, err := output(exec.CommandContext(ctx, "ffmpeg", "-nostdin", "-v", "error", "-protocol_whitelist", "file",
+			"-xerror", "-i", path, "-frames:v", "1", "-f", "image2pipe", "-c:v", "png", "-"))
+		if err != nil {
 			return apierr.New(http.StatusUnprocessableEntity, "decoding image: %v", ExitMsg(err))
+		}
+		if len(png) == 0 { // e.g. a truncated JPEG XL: libjxl exits 0 without a frame
+			return apierr.New(http.StatusUnprocessableEntity, "decoding image: no frame")
 		}
 		img, err = decodePNG(png)
 		return err
