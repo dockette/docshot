@@ -24,12 +24,12 @@ type input struct {
 	name string
 	// load is lazy so a stored hit never downloads the source.
 	load func(ctx context.Context) ([]byte, error)
-	// version identifies the source revision without reading it (size+mtime, S3 ETag); empty means hash the content.
+	// version identifies the source revision without reading it (S3 ETag); empty means hash the content.
 	version      string
 	s3           *s3Ref // set for ?s3= sources: results can be stored next to them
-	storeBase    string // key stem for ?store=s3 of non-S3 sources (path, file name, URL path)
+	storeBase    string // key stem for ?store=s3 of non-S3 sources (file name, URL path)
 	cacheControl string
-	source       string // path, s3, url or upload: the metric label
+	source       string // s3, url or upload: the metric label
 	sourceID     string // canonical source, the purge handle ("s3:bucket/key"); empty for uploads
 	cacheKey     string // disk cache key: from the URL for GET, from the content for uploads
 	background   bool   // a revalidation: nobody is waiting, no request metrics
@@ -216,8 +216,6 @@ func outputExt(o render.Options) string {
 	}
 	return o.Format
 }
-
-func itoa64(n int64) string { return strconv.FormatInt(n, 10) }
 
 func match(r *http.Request, etag string) bool {
 	for _, t := range strings.Split(r.Header.Get("If-None-Match"), ",") {

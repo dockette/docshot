@@ -137,7 +137,7 @@ case "$cmd" in
     read -r c _ _ _ < <(render "$pdf" "$t/p4.webp" "preset=thumb&dpr=2");  check "preset=thumb&dpr=2 → 600x800" 600x800 "$(python3 -c "import sys;d=open(sys.argv[1],'rb').read(30);print('%dx%d'%(int.from_bytes(d[26:28],'little')&0x3fff,int.from_bytes(d[28:30],'little')&0x3fff))" "$t/p4.webp")"
     read -r c _ _ _ < <(render "$pdf" "$t/p5" "preset=nope");               check "unknown preset → 400" 400 "$c"
     ct=$(curl -s -o /dev/null -w '%{content_type}' -F "file=@$pdf" -H 'Accept: image/webp' "$HOST/upload?format=auto&width=200"); check "format=auto + Accept webp" image/webp "$ct"
-    c=$(curl -s -o /dev/null -w '%{http_code} %{content_type}' "$HOST/render?path=does/not/exist.docx&fallback=1"); check "fallback placeholder for an error" "200 image/png" "$c"
+    c=$(curl -s -o /dev/null -w '%{http_code} %{content_type}' "$HOST/render?url=http://127.0.0.1:1/missing.docx&fallback=1"); check "fallback placeholder for an error" "200 image/png" "$c"
     # The error contract: JSON with a stable code, never cached, for every failure.
     jc() { python3 -c 'import json,sys;d=json.load(sys.stdin);print(d["status"],d["code"])'; }
     check "typo in a parameter → 400 unknown_parameter" "400 unknown_parameter" "$(curl -s -F "file=@$pdf" "$HOST/upload?widht=300" | jc)"

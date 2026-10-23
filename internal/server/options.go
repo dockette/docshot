@@ -32,7 +32,7 @@ var processingParams = []string{"dpi", "width", "height", "fit", "position", "fo
 // Allowed parameters per operation; anything else is a 400, so typos and
 // foreign parameters neither return a default picture nor split the cache.
 var (
-	sourceParams = []string{"path", "s3", "url", "name", "sign", "v"} // v: cache buster, part of the cache key
+	sourceParams = []string{"s3", "url", "name", "sign", "v"} // v: cache buster, part of the cache key
 	commonParams = []string{"page", "dpi", "width", "height", "fit", "position", "trim", "pad", "bg", "dpr", "format", "quality", "preset", "store", "fallback", "download"}
 	opParams     = map[string][]string{
 		render.OpPage:  {"time"},
@@ -277,6 +277,10 @@ func (s *Server) parseOpts(r *http.Request, op string) (options, error) {
 		}
 	default:
 		return o, apierr.New(http.StatusBadRequest, "format must be png, jpeg, webp or auto")
+	}
+
+	if o.Width == 0 && o.Height == 0 {
+		o.Width, o.Height = s.cfg.defaultW, s.cfg.defaultH
 	}
 
 	// dpr is folded into the sizes, so it stays out of the cache key.

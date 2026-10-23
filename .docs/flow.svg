@@ -1,0 +1,96 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 320" width="960" height="320" role="img" aria-label="docshot flow: a source goes through detect, convert and rasterize into a page, a contact sheet or a ZIP">
+  <style>
+    .bg { fill: none; }
+    .box { fill: #f6f8fa; stroke: #d0d7de; stroke-width: 1.5; }
+    .frame { fill: #ffffff; stroke: #0969da; stroke-width: 2; }
+    .stage { fill: #ddf4ff; stroke: #54aeff; stroke-width: 1.5; }
+    .cache { fill: #fff8c5; stroke: #d4a72c; stroke-width: 1.5; }
+    .out { fill: #dafbe1; stroke: #4ac26b; stroke-width: 1.5; }
+    .line { fill: none; stroke: #8c959f; stroke-width: 1.5; }
+    .t { font: 600 14px system-ui, -apple-system, "Segoe UI", sans-serif; fill: #1f2328; }
+    .s { font: 12px system-ui, -apple-system, "Segoe UI", sans-serif; fill: #59636e; }
+    .c { font: 600 13px ui-monospace, SFMono-Regular, Menlo, monospace; fill: #1f2328; }
+    .h { font: 700 15px system-ui, -apple-system, "Segoe UI", sans-serif; fill: #0969da; }
+    .head { fill: #8c959f; }
+    @media (prefers-color-scheme: dark) {
+      .box { fill: #161b22; stroke: #3d444d; }
+      .frame { fill: #0d1117; stroke: #4493f8; }
+      .stage { fill: #0c2d6b; stroke: #1f6feb; }
+      .cache { fill: #3b2e00; stroke: #9e6a03; }
+      .out { fill: #0f3d1f; stroke: #2ea043; }
+      .line { stroke: #6e7681; }
+      .head { fill: #6e7681; }
+      .t, .c { fill: #e6edf3; }
+      .s { fill: #9198a1; }
+      .h { fill: #4493f8; }
+    }
+  </style>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path class="head" d="M0 0 L10 5 L0 10 z"/>
+    </marker>
+  </defs>
+
+  <!-- sources -->
+  <rect class="box" x="16" y="56" width="170" height="52" rx="8"/>
+  <text class="c" x="30" y="78">?url=https://…</text>
+  <text class="s" x="30" y="96">any web document</text>
+  <rect class="box" x="16" y="120" width="170" height="52" rx="8"/>
+  <text class="c" x="30" y="142">?s3=bucket/key</text>
+  <text class="s" x="30" y="160">S3 / MinIO object</text>
+  <rect class="box" x="16" y="184" width="170" height="52" rx="8"/>
+  <text class="c" x="30" y="206">POST /upload</text>
+  <text class="s" x="30" y="224">multipart or raw body</text>
+
+  <path class="line" d="M186 82 C220 82 220 140 248 140" marker-end="url(#arrow)"/>
+  <path class="line" d="M186 146 C220 146 220 140 248 140" marker-end="url(#arrow)"/>
+  <path class="line" d="M186 210 C220 210 220 140 248 140" marker-end="url(#arrow)"/>
+
+  <!-- docshot -->
+  <rect class="frame" x="230" y="16" width="500" height="288" rx="12"/>
+  <text class="h" x="248" y="44">docshot</text>
+
+  <rect class="stage" x="250" y="64" width="140" height="152" rx="8"/>
+  <text class="t" x="264" y="90">Detect</text>
+  <text class="s" x="264" y="114">extension or</text>
+  <text class="s" x="264" y="130">magic bytes,</text>
+  <text class="s" x="264" y="146">OLE2 streams</text>
+  <text class="s" x="264" y="170">300+ formats</text>
+
+  <rect class="stage" x="410" y="64" width="140" height="152" rx="8"/>
+  <text class="t" x="424" y="90">Convert</text>
+  <text class="s" x="424" y="114">Gotenberg:</text>
+  <text class="s" x="424" y="130">LibreOffice,</text>
+  <text class="s" x="424" y="146">Chromium → PDF</text>
+  <text class="s" x="424" y="170">ffmpeg, LibRaw,</text>
+  <text class="s" x="424" y="186">Go for media</text>
+
+  <rect class="stage" x="570" y="64" width="140" height="152" rx="8"/>
+  <text class="t" x="584" y="90">Rasterize</text>
+  <text class="s" x="584" y="114">PDFium draws</text>
+  <text class="s" x="584" y="130">the page, then</text>
+  <text class="s" x="584" y="146">trim, fit, pad</text>
+  <text class="s" x="584" y="162">and encode</text>
+
+  <path class="line" d="M390 140 L408 140" marker-end="url(#arrow)"/>
+  <path class="line" d="M550 140 L568 140" marker-end="url(#arrow)"/>
+
+  <rect class="cache" x="250" y="232" width="460" height="52" rx="8"/>
+  <text class="t" x="264" y="255">Cache</text>
+  <text class="s" x="264" y="273">memory + disk LRU, keyed by URL, ETag and TTL; optional copy to S3</text>
+
+  <!-- outputs -->
+  <path class="line" d="M710 140 C744 140 744 76 772 76" marker-end="url(#arrow)"/>
+  <path class="line" d="M710 140 L772 160" marker-end="url(#arrow)"/>
+  <path class="line" d="M710 140 C744 140 744 244 772 244" marker-end="url(#arrow)"/>
+
+  <rect class="out" x="774" y="48" width="170" height="56" rx="8"/>
+  <text class="t" x="788" y="72">One page</text>
+  <text class="s" x="788" y="90">PNG, JPEG, WebP</text>
+  <rect class="out" x="774" y="132" width="170" height="56" rx="8"/>
+  <text class="t" x="788" y="156">Contact sheet</text>
+  <text class="s" x="788" y="174">pages or video frames</text>
+  <rect class="out" x="774" y="216" width="170" height="56" rx="8"/>
+  <text class="t" x="788" y="240">ZIP of pages</text>
+  <text class="s" x="788" y="258">or JSON metadata</text>
+</svg>

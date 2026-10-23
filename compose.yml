@@ -16,9 +16,11 @@ services:
       - "9994:3000"
     environment:
       - DOCSHOT_DEFAULT_DPI=${DOCSHOT_DEFAULT_DPI:-150}
+      - DOCSHOT_DEFAULT_WIDTH=${DOCSHOT_DEFAULT_WIDTH:-0}
+      - DOCSHOT_DEFAULT_HEIGHT=${DOCSHOT_DEFAULT_HEIGHT:-0}
       - DOCSHOT_MAX_SIDE=${DOCSHOT_MAX_SIDE:-10000}
       - DOCSHOT_MAX_PIXELS=${DOCSHOT_MAX_PIXELS:-40000000}
-      - DOCSHOT_MAX_BYTES=${DOCSHOT_MAX_BYTES:-104857600}
+      - DOCSHOT_MAX_BYTES=${DOCSHOT_MAX_BYTES:-100MB}
       - DOCSHOT_TIMEOUT_SECONDS=${DOCSHOT_TIMEOUT_SECONDS:-180}
       - DOCSHOT_PDFIUM_WORKERS=${DOCSHOT_PDFIUM_WORKERS:-4}
       - DOCSHOT_CACHE_MB=${DOCSHOT_CACHE_MB:-256}
@@ -32,8 +34,6 @@ services:
       - DOCSHOT_CACHE_TAGS=${DOCSHOT_CACHE_TAGS:-false}
       - DOCSHOT_CDN_MAX_AGE=${DOCSHOT_CDN_MAX_AGE:-0}
       # GET /render sources for <img src=…> previews — all off unless set.
-      # ?path=  : mount a directory below and point DOCSHOT_ROOT at it.
-      - DOCSHOT_ROOT=${DOCSHOT_ROOT:-}
       # ?s3=bucket/key as a source, and ?store=s3[:append|replace|suffix|hash]
       # to keep results in S3 (next to an S3 source; else in DOCSHOT_STORE_BUCKET).
       - DOCSHOT_S3_ENDPOINT=${DOCSHOT_S3_ENDPOINT:-}
@@ -50,7 +50,6 @@ services:
       - TZ=${TZ:-UTC}
     volumes:
       - docshot-cache:/tmp/docshot      # disk cache survives restarts and upgrades
-    #   - /path/to/documents:/data:ro   # + DOCSHOT_ROOT=/data
     deploy:
       resources:
         limits:

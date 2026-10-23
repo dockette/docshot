@@ -23,7 +23,7 @@ var version = "dev" // release from VERSION (YYYY.MM.DD[.N]), set with -ldflags 
 
 func main() {
 	healthcheck := flag.Bool("healthcheck", false, "probe /health on the local listener and exit (for Docker HEALTHCHECK; the image has no shell)")
-	sign := flag.String("sign", "", "print the signed form of a URL path+query (needs DOCSHOT_SIGN_KEY), e.g. -sign '/render?path=a.docx&preset=thumb'")
+	sign := flag.String("sign", "", "print the signed form of a URL path+query (needs DOCSHOT_SIGN_KEY), e.g. -sign '/render?url=https://example.com/a.docx&preset=thumb'")
 	flag.Parse()
 
 	if *sign != "" {
