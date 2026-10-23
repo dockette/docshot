@@ -10,8 +10,10 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/dockette/docshot/internal/apierr"
+	"github.com/dockette/docshot/internal/metrics"
 	"github.com/dockette/docshot/internal/render"
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
@@ -93,7 +95,11 @@ func (s *Server) s3Input(ctx context.Context, ref string) (input, error) {
 	if !s.bucketAllowed(bucket) {
 		return input{}, apierr.New(http.StatusForbidden, "bucket %q not in DOCSHOT_S3_BUCKETS", bucket)
 	}
-	st, err := s.s3.StatObject(ctx, bucket, key, minio.StatObjectOptions{})
+	var st minio.ObjectInfo
+	err := s3Call("stat", func() (err error) {
+		st, err = s.s3.StatObject(ctx, bucket, key, minio.StatObjectOptions{})
+		return err
+	})
 	if err != nil {
 		return input{}, s3Err(err, ref)
 	}
@@ -107,12 +113,17 @@ func (s *Server) s3Input(ctx context.Context, ref string) (input, error) {
 		version:      "s3:" + bucket + "/" + key + ":" + src.etag,
 		cacheControl: s.cfg.cacheControl,
 		load: func(ctx context.Context) ([]byte, error) {
-			obj, err := s.s3.GetObject(ctx, bucket, key, minio.GetObjectOptions{})
-			if err != nil {
-				return nil, s3Err(err, ref)
-			}
-			defer obj.Close()
-			b, err := io.ReadAll(io.LimitReader(obj, s.cfg.maxBytes+1))
+			var b []byte
+			err := s3Call("get", func() error {
+				obj, err := s.s3.GetObject(ctx, bucket, key, minio.GetObjectOptions{})
+				if err != nil {
+					return err
+				}
+				defer obj.Close()
+				b, err = io.ReadAll(io.LimitReader(obj, s.cfg.maxBytes+1))
+				metrics.S3Bytes.WithLabelValues("received").Add(float64(len(b)))
+				return err
+			})
 			if err != nil {
 				return nil, s3Err(err, ref)
 			}
@@ -204,24 +215,59 @@ func stem(key string) string {
 
 // fetchStored returns the stored result if it is fresh.
 func (s *Server) fetchStored(ctx context.Context, t storeTarget) ([]byte, bool) {
-	st, err := s.s3.StatObject(ctx, t.bucket, t.key, minio.StatObjectOptions{})
+	var st minio.ObjectInfo
+	err := s3Call("stat_stored", func() (err error) {
+		st, err = s.s3.StatObject(ctx, t.bucket, t.key, minio.StatObjectOptions{})
+		return err
+	})
 	if err != nil || metaGet(st.UserMetadata, metaSource) != t.tag {
 		return nil, false // missing, or made from an older revision of the source
 	}
-	obj, err := s.s3.GetObject(ctx, t.bucket, t.key, minio.GetObjectOptions{})
-	if err != nil {
-		return nil, false
-	}
-	defer obj.Close()
-	b, err := io.ReadAll(obj)
+	var b []byte
+	err = s3Call("get_stored", func() error {
+		obj, err := s.s3.GetObject(ctx, t.bucket, t.key, minio.GetObjectOptions{})
+		if err != nil {
+			return err
+		}
+		defer obj.Close()
+		b, err = io.ReadAll(obj)
+		metrics.S3Bytes.WithLabelValues("received").Add(float64(len(b)))
+		return err
+	})
 	return b, err == nil
 }
 
 func (s *Server) putStored(ctx context.Context, t storeTarget, data []byte, contentType string) error {
-	_, err := s.s3.PutObject(ctx, t.bucket, t.key, bytes.NewReader(data), int64(len(data)), minio.PutObjectOptions{
-		ContentType:  contentType,
-		UserMetadata: map[string]string{metaSource: t.tag},
+	err := s3Call("put_stored", func() error {
+		_, err := s.s3.PutObject(ctx, t.bucket, t.key, bytes.NewReader(data), int64(len(data)), minio.PutObjectOptions{
+			ContentType:  contentType,
+			UserMetadata: map[string]string{metaSource: t.tag},
+		})
+		return err
 	})
+	if err == nil {
+		metrics.S3Bytes.WithLabelValues("sent").Add(float64(len(data)))
+	}
+	return err
+}
+
+// s3Call times one S3 operation and counts it by result.
+func s3Call(op string, f func() error) error {
+	t0 := time.Now()
+	err := f()
+	metrics.S3Seconds.WithLabelValues(op).Observe(time.Since(t0).Seconds())
+	result := "ok"
+	if err != nil {
+		switch minio.ToErrorResponse(err).Code {
+		case "NoSuchKey", "NoSuchBucket":
+			result = "not_found"
+		case "AccessDenied":
+			result = "denied"
+		default:
+			result = "error"
+		}
+	}
+	metrics.S3Requests.WithLabelValues(op, result).Inc()
 	return err
 }
 

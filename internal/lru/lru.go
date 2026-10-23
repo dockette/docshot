@@ -64,3 +64,9 @@ func (c *Cache[V]) Bytes() int64 {
 	defer c.mu.Unlock()
 	return c.used
 }
+
+func (c *Cache[V]) Len() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.items)
+}

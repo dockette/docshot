@@ -23,6 +23,14 @@ services:
       - DOCSHOT_PDFIUM_WORKERS=${DOCSHOT_PDFIUM_WORKERS:-4}
       - DOCSHOT_CACHE_MB=${DOCSHOT_CACHE_MB:-256}
       - DOCSHOT_MAX_AGE=${DOCSHOT_MAX_AGE:-3600}
+      # Disk cache of rendered results, keyed by URL: a hit costs no S3/file access. See README → Caching.
+      - DOCSHOT_CACHE_DIR=${DOCSHOT_CACHE_DIR:-/tmp/docshot}
+      - DOCSHOT_CACHE_SIZE=${DOCSHOT_CACHE_SIZE:-10GB}
+      - DOCSHOT_CACHE_TTL=${DOCSHOT_CACHE_TTL:-0}
+      - DOCSHOT_CACHE_STALE=${DOCSHOT_CACHE_STALE:-true}
+      - DOCSHOT_CACHE_BUSTER=${DOCSHOT_CACHE_BUSTER:-}
+      - DOCSHOT_CACHE_TAGS=${DOCSHOT_CACHE_TAGS:-false}
+      - DOCSHOT_CDN_MAX_AGE=${DOCSHOT_CDN_MAX_AGE:-0}
       # GET /render sources for <img src=…> previews — all off unless set.
       # ?path=  : mount a directory below and point DOCSHOT_ROOT at it.
       - DOCSHOT_ROOT=${DOCSHOT_ROOT:-}
@@ -40,10 +48,14 @@ services:
       # ?url= : regexp of URLs allowed to be fetched (SSRF guard). Empty = off.
       - DOCSHOT_FETCH_ALLOW=${DOCSHOT_FETCH_ALLOW:-}
       - TZ=${TZ:-UTC}
-    # volumes:
+    volumes:
+      - docshot-cache:/tmp/docshot      # disk cache survives restarts and upgrades
     #   - /path/to/documents:/data:ro   # + DOCSHOT_ROOT=/data
     deploy:
       resources:
         limits:
           cpus: "${DOCSHOT_CPUS:-4.0}"
           memory: ${DOCSHOT_MEMORY:-4g}
+
+volumes:
+  docshot-cache:

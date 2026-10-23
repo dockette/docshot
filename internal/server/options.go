@@ -32,7 +32,7 @@ var processingParams = []string{"dpi", "width", "height", "fit", "position", "fo
 // Allowed parameters per operation; anything else is a 400, so typos and
 // foreign parameters neither return a default picture nor split the cache.
 var (
-	sourceParams = []string{"path", "s3", "url", "name", "sign"}
+	sourceParams = []string{"path", "s3", "url", "name", "sign", "v"} // v: cache buster, part of the cache key
 	commonParams = []string{"page", "dpi", "width", "height", "fit", "position", "trim", "pad", "bg", "dpr", "format", "quality", "preset", "store", "fallback", "download"}
 	opParams     = map[string][]string{
 		render.OpPage:  {"time"},

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/dockette/docshot/internal/apierr"
+	"github.com/dockette/docshot/internal/diskcache"
 	"github.com/dockette/docshot/internal/imaging"
 	"github.com/dockette/docshot/internal/metrics"
 	"github.com/dockette/docshot/internal/render"
@@ -28,39 +29,65 @@ type input struct {
 	s3           *s3Ref // set for ?s3= sources: results can be stored next to them
 	storeBase    string // key stem for ?store=s3 of non-S3 sources (path, file name, URL path)
 	cacheControl string
+	source       string // path, s3, url or upload: the metric label
+	sourceID     string // canonical source, the purge handle ("s3:bucket/key"); empty for uploads
+	cacheKey     string // disk cache key: from the URL for GET, from the content for uploads
+	background   bool   // a revalidation: nobody is waiting, no request metrics
 }
 
 func (s *Server) serve(w http.ResponseWriter, r *http.Request, in input, o options) {
 	start := time.Now()
 	h := w.Header()
-	if in.cacheControl != "" {
-		h.Set("Cache-Control", in.cacheControl)
+	s.cacheHeaders(h, in.cacheControl, in.sourceID, o)
+	fail := func(err error) { s.fail(w, err, in.name, in.source, o) }
+	count := func(state string) {
+		if !in.background {
+			metrics.Requests.WithLabelValues(o.Op, in.source, state).Inc()
+		}
 	}
-	if o.autoFormat {
-		h.Set("Vary", "Accept")
-	}
-	fail := func(err error) { s.fail(w, err, in.name, o) }
 	notModified := func(etag string) bool {
 		h.Set("ETag", etag)
 		if !match(r, etag) {
 			return false
 		}
-		metrics.Inc("docshot_requests_total", metrics.Label("cache", "not_modified"))
+		count("not_modified")
 		w.WriteHeader(http.StatusNotModified)
 		return true
 	}
+	// rev is the source revision a result is made from; disk entries are reused only for the same one.
+	rev := in.version
+	toDisk := func(data []byte, contentType, typ string) bool {
+		now := time.Now()
+		h.Set("Last-Modified", now.UTC().Format(http.TimeFormat))
+		hdr := map[string]string{}
+		for _, k := range headersToReplay {
+			if v := h.Get(k); v != "" {
+				hdr[k] = v
+			}
+		}
+		return s.putCache(in, diskcache.Entry{Type: typ, Revision: rev, ContentType: contentType, ETag: h.Get("ETag"), Header: hdr, Created: now}, data)
+	}
 	fromStore := func(t storeTarget, data []byte) {
-		metrics.Inc("docshot_requests_total", metrics.Label("cache", "store"))
+		count("store")
 		s.attachment(h, in.name, o)
 		h.Set("Content-Type", contentTypeOf(o.Options))
 		h.Set("X-Cache", "store")
 		h.Set("X-Stored-As", t.String())
+		status := []string{"fwd=uri-miss", "detail=store"}
+		if toDisk(data, contentTypeOf(o.Options), "") {
+			status = append(status, "stored")
+		}
+		h.Set("Cache-Status", cacheStatus(status...))
 		h.Set("X-Render-Ms", strconv.FormatInt(time.Since(start).Milliseconds(), 10))
 		_, _ = w.Write(data)
 	}
 
 	// Fast 304 when the source revision is known up front: no read, no render.
-	if in.version != "" && notModified(`"`+render.Hash(in.version, o.Key())+`"`) {
+	if in.version != "" && notModified(s.etag(in.version, o.Key())) {
+		return
+	}
+	// An expired disk entry whose source did not change: no download, no render.
+	if in.version != "" && s.reuse(w, r, in, o, rev, start) {
 		return
 	}
 
@@ -94,8 +121,17 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, in input, o optio
 		return
 	}
 	content := render.Hash(string(body))
-	if in.version == "" && notModified(`"`+render.Hash(content, o.Key())+`"`) {
-		return
+	if in.version == "" {
+		rev = "sha:" + content
+		if notModified(s.etag(content, o.Key())) {
+			return
+		}
+		if in.cacheKey == "" && s.cache != nil {
+			in.cacheKey = s.uploadKey(content, in.name, o)
+		}
+		if s.reuse(w, r, in, o, rev, start) {
+			return
+		}
 	}
 	if o.store && !resolved {
 		if target, resolved, err = s.storeTarget(in, o, content); err != nil {
@@ -114,7 +150,16 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, in input, o optio
 		fail(err)
 		return
 	}
-	metrics.Inc("docshot_requests_total", metrics.Label("cache", cacheState))
+	count(cacheState)
+	typ := render.TypeLabel(res.Kind)
+	if !in.background {
+		metrics.InputBytes.WithLabelValues(in.source, typ).Observe(float64(len(body)))
+		metrics.Documents.WithLabelValues(typ, res.Meta.Path, o.Op).Inc()
+		metrics.OutputBytes.WithLabelValues(o.Op, outputExt(o.Options)).Observe(float64(len(res.Img)))
+		if res.Meta.PageCount > 0 {
+			metrics.Pages.WithLabelValues(res.Meta.Path).Observe(float64(res.Meta.PageCount))
+		}
+	}
 
 	if o.store && resolved {
 		if err := s.putStored(ctx, target, res.Img, res.ContentType); err != nil {
@@ -138,10 +183,21 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, in input, o optio
 	if res.Meta.Duration > 0 {
 		h.Set("X-Duration", strconv.FormatFloat(res.Meta.Duration, 'f', 2, 64))
 	}
+	status := []string{"fwd=uri-miss"}
+	switch cacheState {
+	case "memory", "document":
+		status = append(status, "detail="+cacheState)
+	case "shared":
+		status = append(status, "collapsed")
+	}
+	if toDisk(res.Img, res.ContentType, typ) {
+		status = append(status, "stored")
+	}
+	h.Set("Cache-Status", cacheStatus(status...))
 	h.Set("X-Render-Ms", strconv.FormatInt(time.Since(start).Milliseconds(), 10))
 	_, _ = w.Write(res.Img)
 	slog.Info("rendered", "name", in.name, "op", o.Op, "kind", res.Kind.Ext, "path", res.Meta.Path, "page", o.Page,
-		"pages", res.Meta.PageCount, "bytes", len(res.Img), "cache", cacheState, "ms", time.Since(start).Milliseconds())
+		"pages", res.Meta.PageCount, "bytes", len(res.Img), "cache", cacheState, "background", in.background, "ms", time.Since(start).Milliseconds())
 }
 
 func contentTypeOf(o render.Options) string {
@@ -173,17 +229,22 @@ func match(r *http.Request, etag string) bool {
 }
 
 // fail answers JSON, or with fallback a placeholder picture (status 200, error in a header).
-func (s *Server) fail(w http.ResponseWriter, err error, name string, o options) {
+func (s *Server) fail(w http.ResponseWriter, err error, name, source string, o options) {
 	status := http.StatusInternalServerError
+	code := "internal"
 	var he *apierr.Error
 	if errors.As(err, &he) {
-		status = he.Status
+		status, code = he.Status, he.Code
+		if code == "" {
+			code = apierr.CodeOf(status)
+		}
 	}
-	metrics.Inc("docshot_errors_total", metrics.Label("status", strconv.Itoa(status)))
-	// Errors must not keep the ETag/Cache-Control set earlier, or caches pin the failure.
+	metrics.Errors.WithLabelValues(o.Op, source, strconv.Itoa(status), code).Inc()
+	// Errors must not keep the validators and cache headers set earlier, or caches pin the failure.
 	h := w.Header()
-	h.Del("ETag")
-	h.Del("Vary")
+	for _, k := range []string{"ETag", "Last-Modified", "Vary", "CDN-Cache-Control", "Surrogate-Key", "Cache-Tag", "Cache-Status"} {
+		h.Del(k)
+	}
 	h.Set("Cache-Control", "no-store")
 	if !o.fallback || status == http.StatusTooManyRequests {
 		apierr.Write(w, err)

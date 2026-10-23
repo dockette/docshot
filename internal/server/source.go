@@ -13,6 +13,7 @@ import (
 	"regexp"
 
 	"github.com/dockette/docshot/internal/apierr"
+	"github.com/dockette/docshot/internal/metrics"
 )
 
 // ?url= fetching is SSRF by design, hence the mandatory
@@ -23,7 +24,18 @@ type source struct {
 	name string
 }
 
-func (s *Server) fromURL(ctx context.Context, raw string) (source, error) {
+func (s *Server) fromURL(ctx context.Context, raw string) (src source, err error) {
+	defer func() {
+		result := "ok"
+		switch {
+		case err == nil:
+		case statusOf(err) == http.StatusForbidden:
+			result = "denied"
+		default:
+			result = "error"
+		}
+		metrics.URLFetches.WithLabelValues(result).Inc()
+	}()
 	if s.cfg.fetchAllow == nil {
 		return source{}, apierr.New(http.StatusForbidden, "url source disabled: set DOCSHOT_FETCH_ALLOW to a regexp of allowed URLs")
 	}
