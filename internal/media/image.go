@@ -20,6 +20,13 @@ func ImageSequence(ctx context.Context, body []byte, ext string, maxSide int) (*
 	cfg, format, err := image.DecodeConfig(bytes.NewReader(body))
 	if err != nil {
 		img, err := ffmpegImage(ctx, body, ext)
+		if err != nil && ctx.Err() == nil {
+			if fixed := salvageICO(body); fixed != nil {
+				if fimg, ferr := ffmpegImage(ctx, fixed, "ico"); ferr == nil {
+					img, err = fimg, nil
+				}
+			}
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -32,16 +39,30 @@ func ImageSequence(ctx context.Context, body []byte, ext string, maxSide int) (*
 	var frames []image.Image
 	switch format {
 	case "gif":
+		// a broken GIF keeps its complete frames, else falls through to a still
 		g, err := gif.DecodeAll(bytes.NewReader(body))
 		if err != nil {
-			return nil, apierr.New(http.StatusUnprocessableEntity, "decoding gif: %v", err)
+			if fixed := salvageGIF(body); fixed != nil {
+				g, err = gif.DecodeAll(bytes.NewReader(fixed))
+			}
 		}
-		if int64(len(g.Image))*int64(cfg.Width)*int64(cfg.Height) > 3*imaging.MaxPixels {
-			return nil, apierr.New(http.StatusUnprocessableEntity, "gif has %d frames of %dx%d, over the pixel limit", len(g.Image), cfg.Width, cfg.Height)
+		if err == nil {
+			if int64(len(g.Image))*int64(cfg.Width)*int64(cfg.Height) > 3*imaging.MaxPixels {
+				return nil, apierr.New(http.StatusUnprocessableEntity, "gif has %d frames of %dx%d, over the pixel limit", len(g.Image), cfg.Width, cfg.Height)
+			}
+			frames = gifFrames(g)
 		}
-		frames = gifFrames(g)
 	case "webp":
-		if a, err := webp.DecodeAll(bytes.NewReader(body)); err == nil && len(a.Image) > 1 {
+		// a cut animation can decode as one frame or none without an error
+		a, err := decodeWebPAll(body)
+		if err != nil || len(a.Image) < 2 {
+			if fixed := salvageWebP(body, cfg); fixed != nil {
+				if f, ferr := decodeWebPAll(fixed); ferr == nil && (err != nil || len(f.Image) > len(a.Image)) {
+					a, err = f, nil
+				}
+			}
+		}
+		if err == nil && len(a.Image) > 1 {
 			if int64(len(a.Image))*int64(cfg.Width)*int64(cfg.Height) > 3*imaging.MaxPixels {
 				return nil, apierr.New(http.StatusUnprocessableEntity, "webp has %d frames, over the pixel limit", len(a.Image))
 			}
@@ -49,15 +70,37 @@ func ImageSequence(ctx context.Context, body []byte, ext string, maxSide int) (*
 		}
 	}
 	if frames == nil {
-		img, _, err := image.Decode(bytes.NewReader(body))
+		img, err := decodeImage(body)
 		if err != nil {
-			if img, err = ffmpegImage(ctx, body, ext); err != nil {
+			if img, err = decodeBroken(ctx, body, cfg, format, ext, err); err != nil {
 				return nil, err
 			}
 		}
 		frames = []image.Image{img}
 	}
 	return imaging.Frames(frames, maxSide), nil
+}
+
+// safely runs a decoder, turning its panic on hostile input into an error
+// (gen2brain/webp indexes an empty frame list on a cut animation).
+func safely[T any](decode func() (T, error)) (v T, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = apierr.New(http.StatusUnprocessableEntity, "decoder panic: %v", r)
+		}
+	}()
+	return decode()
+}
+
+func decodeImage(b []byte) (image.Image, error) {
+	return safely(func() (image.Image, error) {
+		img, _, err := image.Decode(bytes.NewReader(b))
+		return img, err
+	})
+}
+
+func decodeWebPAll(b []byte) (*webp.WEBP, error) {
+	return safely(func() (*webp.WEBP, error) { return webp.DecodeAll(bytes.NewReader(b)) })
 }
 
 // gifFrames composites frames over the previous canvas, honouring disposal.

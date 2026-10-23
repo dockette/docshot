@@ -86,7 +86,8 @@ All options are in [`internal/server/server.go`](internal/server/server.go).
 
 A small Go server on `:3000` runs [Gotenberg](https://gotenberg.dev) inside the same
 container. Documents become PDF (LibreOffice, Chromium) and PDFium draws the page;
-images, video and audio go through Go and ffmpeg. JavaScript and network access are
+images, video and audio go through Go and ffmpeg. Truncated or corrupted images show
+what survived, like in a browser. JavaScript and network access are
 off for untrusted input.
 
 ## Versions

@@ -27,9 +27,9 @@ type AudioInfo struct {
 }
 
 func ProbeAudio(ctx context.Context, path string) (AudioInfo, error) {
-	out, err := exec.CommandContext(ctx, "ffprobe", "-v", "error", "-protocol_whitelist", "file",
+	out, err := output(exec.CommandContext(ctx, "ffprobe", "-v", "error", "-protocol_whitelist", "file",
 		"-show_entries", "format=duration:format_tags=title,artist,album:stream=codec_type,codec_name,sample_rate,channels:stream_tags=title,artist,album:stream_disposition=attached_pic",
-		"-of", "json", path).Output()
+		"-of", "json", path))
 	if err != nil {
 		return AudioInfo{}, apierr.New(http.StatusUnprocessableEntity, "not a readable audio file: %v", ExitMsg(err))
 	}
@@ -116,8 +116,8 @@ func drawAudioCard(ctx context.Context, path string, a AudioInfo, name, ext stri
 	cover := image.Rect(pad, pad, pad+coverSize, pad+coverSize)
 	drew := false
 	if a.HasCover {
-		if out, err := exec.CommandContext(ctx, "ffmpeg", "-nostdin", "-v", "error", "-protocol_whitelist", "file",
-			"-i", path, "-map", "0:v:0", "-frames:v", "1", "-f", "image2pipe", "-c:v", "png", "-").Output(); err == nil && len(out) > 0 {
+		if out, err := output(exec.CommandContext(ctx, "ffmpeg", "-nostdin", "-v", "error", "-protocol_whitelist", "file",
+			"-i", path, "-map", "0:v:0", "-frames:v", "1", "-f", "image2pipe", "-c:v", "png", "-")); err == nil && len(out) > 0 {
 			if pic, err := decodePNG(out); err == nil {
 				pic = imaging.Fit(pic, imaging.Options{Width: coverSize, Height: coverSize, Fit: "cover", Position: "center"}, 4096)
 				draw.Draw(img, cover, pic, pic.Bounds().Min, draw.Src)
@@ -151,10 +151,10 @@ func drawAudioCard(ctx context.Context, path string, a AudioInfo, name, ext stri
 	imaging.DrawText(img, strings.Join(facts, "  ·  "), x, pad+190, 30, color.NRGBA{156, 163, 175, 255})
 
 	waveW := W - 2*pad
-	out, err := exec.CommandContext(ctx, "ffmpeg", "-nostdin", "-v", "error", "-protocol_whitelist", "file",
+	out, err := output(exec.CommandContext(ctx, "ffmpeg", "-nostdin", "-v", "error", "-protocol_whitelist", "file",
 		"-i", path, "-filter_complex",
 		fmt.Sprintf("aformat=channel_layouts=mono,showwavespic=s=%dx%d:colors=0x60a5fa:scale=sqrt", waveW, waveH),
-		"-frames:v", "1", "-f", "image2pipe", "-c:v", "png", "-").Output()
+		"-frames:v", "1", "-f", "image2pipe", "-c:v", "png", "-"))
 	if err == nil {
 		if wave, err := decodePNG(out); err == nil {
 			r := image.Rect(pad, H-pad-waveH, pad+waveW, H-pad)

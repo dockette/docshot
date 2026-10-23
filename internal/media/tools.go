@@ -106,7 +106,7 @@ func RawPreview(ctx context.Context, body []byte, ext string) (image.Image, erro
 
 // decodeAny decodes with Go when it can, else with ffmpeg.
 func decodeAny(ctx context.Context, b []byte, ext string) (image.Image, error) {
-	if img, _, err := image.Decode(bytes.NewReader(b)); err == nil {
+	if img, err := decodeImage(b); err == nil {
 		return img, nil
 	}
 	return ffmpegImage(ctx, b, ext)
