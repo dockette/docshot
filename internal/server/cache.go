@@ -10,7 +10,6 @@ import (
 	"math"
 	"net/http"
 	"net/url"
-	"path"
 	"strconv"
 	"strings"
 	"time"
@@ -25,7 +24,7 @@ import (
 // The disk cache answers GET requests by their URL (like imgproxy's internal cache):
 // the key is the source, the canonical options, ?v= and DOCSHOT_CACHE_BUSTER — not ?sign=,
 // which is checked before the lookup. A hit costs no S3 or file access. Past DOCSHOT_CACHE_TTL
-// the source revision (S3 ETag, size+mtime, content hash) is re-checked, and only a changed
+// the source revision (S3 ETag, content hash) is re-checked, and only a changed
 // source is downloaded and rendered again. Uploads are cached by content hash.
 
 // immutable is the Cache-Control of versioned URLs (?v=): the bytes never change.
@@ -37,8 +36,6 @@ var headersToReplay = []string{"X-Source-Type", "X-Render-Path", "X-Page", "X-Pa
 // sourceID is the canonical source of a GET request and the purge handle ("" = none given).
 func sourceID(q url.Values) string {
 	switch {
-	case q.Get("path") != "":
-		return "path:" + path.Clean("/"+q.Get("path"))
 	case q.Get("s3") != "":
 		return "s3:" + strings.TrimPrefix(q.Get("s3"), "s3://")
 	case q.Get("url") != "":
@@ -49,7 +46,7 @@ func sourceID(q url.Values) string {
 
 // sourceKind is the source as a metric label.
 func sourceKind(q url.Values) string {
-	for _, k := range []string{"path", "s3", "url"} {
+	for _, k := range []string{"s3", "url"} {
 		if q.Get(k) != "" {
 			return k
 		}
@@ -117,8 +114,6 @@ func (s *Server) ttlParam(e diskcache.Entry) []string {
 // a disabled source, a bucket taken off DOCSHOT_S3_BUCKETS or a narrowed DOCSHOT_FETCH_ALLOW.
 func (s *Server) sourceAllowed(q url.Values) bool {
 	switch sourceKind(q) {
-	case "path":
-		return s.cfg.root != ""
 	case "s3":
 		bucket, _, _ := strings.Cut(strings.TrimPrefix(q.Get("s3"), "s3://"), "/")
 		return s.s3 != nil && s.bucketAllowed(bucket)
@@ -292,14 +287,14 @@ func (s *Server) putCache(in input, e diskcache.Entry, data []byte) bool {
 	return false
 }
 
-// handlePurge: DELETE /cache?s3=bucket/key (or path=, url=) drops every variant of one source; ?all=true drops everything.
+// handlePurge: DELETE /cache?s3=bucket/key (or url=) drops every variant of one source; ?all=true drops everything.
 func (s *Server) handlePurge(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	for k := range q {
 		switch k {
-		case "path", "s3", "url", "all", "sign":
+		case "s3", "url", "all", "sign":
 		default:
-			apierr.Write(w, &apierr.Error{Status: http.StatusBadRequest, Code: "unknown_parameter", Msg: fmt.Sprintf("unknown parameter %q: DELETE /cache takes path=, s3=, url= or all=true", k)})
+			apierr.Write(w, &apierr.Error{Status: http.StatusBadRequest, Code: "unknown_parameter", Msg: fmt.Sprintf("unknown parameter %q: DELETE /cache takes s3=, url= or all=true", k)})
 			return
 		}
 	}
@@ -318,7 +313,7 @@ func (s *Server) handlePurge(w http.ResponseWriter, r *http.Request) {
 	case src != "":
 		resp["purged"], resp["source"], resp["tag"] = s.cache.Purge(src), src, sourceTag(src)
 	default:
-		apierr.Write(w, apierr.New(http.StatusBadRequest, "DELETE /cache needs ?path=, ?s3=, ?url= or ?all=true"))
+		apierr.Write(w, apierr.New(http.StatusBadRequest, "DELETE /cache needs ?s3=, ?url= or ?all=true"))
 		return
 	}
 	metrics.CachePurged.Add(float64(resp["purged"].(int)))

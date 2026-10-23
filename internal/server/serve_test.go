@@ -1,13 +1,8 @@
 package server
 
 import (
-	"errors"
-	"net/http"
-	"os"
-	"path/filepath"
 	"testing"
 
-	"github.com/dockette/docshot/internal/apierr"
 	"github.com/dockette/docshot/internal/imaging"
 	"github.com/dockette/docshot/internal/render"
 )
@@ -78,46 +73,5 @@ func TestStoreTargets(t *testing.T) {
 	tg, _, _ = s.storeTarget(input{}, o, "abcdef")
 	if tg.String() != "s3://previews/docshot/_hash/ab/abcdef.png" {
 		t.Errorf("nameless upload %q", tg.String())
-	}
-}
-
-func TestResolvePathConfinement(t *testing.T) {
-	root := t.TempDir()
-	outside := t.TempDir()
-	must := func(err error) {
-		t.Helper()
-		if err != nil {
-			t.Fatal(err)
-		}
-	}
-	must(os.MkdirAll(filepath.Join(root, "a"), 0o755))
-	must(os.WriteFile(filepath.Join(root, "a", "doc.txt"), []byte("hi"), 0o644))
-	must(os.WriteFile(filepath.Join(outside, "secret.txt"), []byte("no"), 0o644))
-	must(os.Symlink(filepath.Join(outside, "secret.txt"), filepath.Join(root, "link.txt")))
-
-	s := &Server{cfg: Config{root: root, maxBytes: 1 << 20}}
-	status := func(p string) int {
-		_, _, err := s.resolvePath(p)
-		var he *apierr.Error
-		if errors.As(err, &he) {
-			return he.Status
-		}
-		if err != nil {
-			return -1
-		}
-		return http.StatusOK
-	}
-	for p, want := range map[string]int{
-		"a/doc.txt":                    http.StatusOK,
-		"/a/doc.txt":                   http.StatusOK,
-		"../" + filepath.Base(outside): http.StatusNotFound, // ".." collapses to the root
-		"../../../../etc/passwd":       http.StatusNotFound,
-		"link.txt":                     http.StatusForbidden, // symlink pointing outside
-		"a":                            http.StatusNotFound,  // directory
-		"missing.txt":                  http.StatusNotFound,
-	} {
-		if got := status(p); got != want {
-			t.Errorf("%q: got %d, want %d", p, got, want)
-		}
 	}
 }

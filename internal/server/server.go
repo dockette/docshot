@@ -37,11 +37,12 @@ type Config struct {
 	GotenbergURL string
 	maxBytes     int64
 	defaultDPI   int
+	defaultW     int // DOCSHOT_DEFAULT_WIDTH: used when a request sets neither width nor height; 0 = by DPI
+	defaultH     int // DOCSHOT_DEFAULT_HEIGHT
 	maxSide      int // longest edge of the output image, in pixels
 	Timeout      time.Duration
 	workers      int
 
-	root         string         // DOCSHOT_ROOT: ?path= is confined to this directory
 	fetchAllow   *regexp.Regexp // DOCSHOT_FETCH_ALLOW: ?url= must match
 	cacheMB      int
 	cacheControl string // DOCSHOT_CACHE_CONTROL, or built from DOCSHOT_MAX_AGE
@@ -92,12 +93,12 @@ func LoadConfig() (Config, error) {
 	cfg := Config{
 		Listen:       env("DOCSHOT_LISTEN", ":3000"), // Gotenberg's port: drop-in for its clients
 		GotenbergURL: strings.TrimRight(env("GOTENBERG_URL", "http://gotenberg:3000"), "/"),
-		maxBytes:     int64(envInt("DOCSHOT_MAX_BYTES", 100<<20)),
 		defaultDPI:   envInt("DOCSHOT_DEFAULT_DPI", 150),
+		defaultW:     envInt("DOCSHOT_DEFAULT_WIDTH", 0),
+		defaultH:     envInt("DOCSHOT_DEFAULT_HEIGHT", 0),
 		maxSide:      envInt("DOCSHOT_MAX_SIDE", 10000),
 		Timeout:      time.Duration(envInt("DOCSHOT_TIMEOUT_SECONDS", 180)) * time.Second,
 		workers:      envInt("DOCSHOT_PDFIUM_WORKERS", 4),
-		root:         os.Getenv("DOCSHOT_ROOT"),
 		fetchAllow:   compileAllow(os.Getenv("DOCSHOT_FETCH_ALLOW")),
 		cacheMB:      envInt("DOCSHOT_CACHE_MB", 256),
 		cacheControl: env("DOCSHOT_CACHE_CONTROL", "public, max-age="+strconv.Itoa(envInt("DOCSHOT_MAX_AGE", 3600))+
@@ -127,6 +128,9 @@ func LoadConfig() (Config, error) {
 		cfg.cacheDir = v // set but empty: off
 	}
 	var err error
+	if cfg.maxBytes, err = parseSize(env("DOCSHOT_MAX_BYTES", "100MB")); err != nil {
+		return cfg, fmt.Errorf("DOCSHOT_MAX_BYTES: %w", err)
+	}
 	if cfg.cacheSize, err = parseSize(env("DOCSHOT_CACHE_SIZE", "10GB")); err != nil {
 		return cfg, fmt.Errorf("DOCSHOT_CACHE_SIZE: %w", err)
 	}
@@ -368,7 +372,7 @@ func (s *Server) handleGet(op string) http.HandlerFunc {
 		if pre != nil {
 			in = *pre
 		} else if in, err = s.queryInput(r); err != nil {
-			s.fail(w, err, q.Get("path")+q.Get("s3")+q.Get("url"), sourceKind(q), opts)
+			s.fail(w, err, q.Get("s3")+q.Get("url"), sourceKind(q), opts)
 			return
 		}
 		in.cacheKey, in.sourceID, in.cacheControl = key, src, s.cacheControlFor(q)
@@ -381,8 +385,6 @@ func (s *Server) queryInput(r *http.Request) (input, error) {
 	var in input
 	var err error
 	switch {
-	case q.Get("path") != "":
-		in, err = s.pathInput(q.Get("path"))
 	case q.Get("s3") != "":
 		in, err = s.s3Input(r.Context(), q.Get("s3"))
 	case q.Get("url") != "":
@@ -391,7 +393,7 @@ func (s *Server) queryInput(r *http.Request) (input, error) {
 		in = input{name: src.name, cacheControl: s.cfg.cacheControl, storeBase: urlStoreBase(q.Get("url")),
 			load: func(context.Context) ([]byte, error) { return src.body, nil }}
 	default:
-		err = apierr.New(http.StatusBadRequest, "GET needs ?path=, ?s3= or ?url= (to upload a file, POST it to /upload)")
+		err = apierr.New(http.StatusBadRequest, "GET needs ?s3= or ?url= (to upload a file, POST it to /upload)")
 	}
 	if err != nil {
 		return input{}, err

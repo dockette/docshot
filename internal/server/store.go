@@ -3,12 +3,9 @@ package server
 import (
 	"bytes"
 	"context"
-	"errors"
 	"io"
 	"net/http"
-	"os"
 	"path"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -18,58 +15,6 @@ import (
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
 )
-
-func (s *Server) pathInput(p string) (input, error) {
-	real, st, err := s.resolvePath(p)
-	if err != nil {
-		return input{}, err
-	}
-	rel, _ := filepath.Rel(s.cfg.root, real)
-	return input{
-		name:         filepath.Base(real),
-		storeBase:    filepath.ToSlash(rel),
-		version:      "path:" + real + ":" + itoa64(st.Size()) + ":" + itoa64(st.ModTime().UnixNano()),
-		cacheControl: s.cfg.cacheControl,
-		load: func(context.Context) ([]byte, error) {
-			b, err := os.ReadFile(real)
-			if err != nil {
-				return nil, apierr.New(http.StatusInternalServerError, "reading %s: %v", p, err)
-			}
-			return b, nil
-		},
-	}, nil
-}
-
-// resolvePath confines p to DOCSHOT_ROOT, symlinks included.
-func (s *Server) resolvePath(p string) (string, os.FileInfo, error) {
-	if s.cfg.root == "" {
-		return "", nil, apierr.New(http.StatusNotFound, "path source disabled: set DOCSHOT_ROOT and mount a directory")
-	}
-	rootReal, err := filepath.EvalSymlinks(s.cfg.root)
-	if err != nil {
-		return "", nil, apierr.New(http.StatusInternalServerError, "DOCSHOT_ROOT: %v", err)
-	}
-	// Clean against "/" first so "../../etc/passwd" collapses to "/etc/passwd"
-	// under the root, then resolve symlinks and check we are still inside.
-	real, err := filepath.EvalSymlinks(filepath.Join(rootReal, filepath.Clean("/"+p)))
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return "", nil, apierr.New(http.StatusNotFound, "no such file: %s", p)
-		}
-		return "", nil, apierr.New(http.StatusBadRequest, "path: %v", err)
-	}
-	if real != rootReal && !strings.HasPrefix(real, rootReal+string(filepath.Separator)) {
-		return "", nil, apierr.New(http.StatusForbidden, "path escapes DOCSHOT_ROOT")
-	}
-	st, err := os.Stat(real)
-	if err != nil || !st.Mode().IsRegular() {
-		return "", nil, apierr.New(http.StatusNotFound, "not a regular file: %s", p)
-	}
-	if st.Size() > s.cfg.maxBytes {
-		return "", nil, apierr.New(http.StatusRequestEntityTooLarge, "file larger than %d bytes", s.cfg.maxBytes)
-	}
-	return real, st, nil
-}
 
 func newS3(cfg Config) (*minio.Client, error) {
 	if cfg.s3Endpoint == "" {

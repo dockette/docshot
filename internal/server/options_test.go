@@ -68,7 +68,7 @@ func TestFormatAuto(t *testing.T) {
 
 func TestSignature(t *testing.T) {
 	key := []byte("0123456789abcdef0123456789abcdef")
-	signed, err := SignURL(key, "/render?width=300&path=a/b.docx")
+	signed, err := SignURL(key, "/render?width=300&url=https://example.com/a.docx")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,7 +83,7 @@ func TestSignature(t *testing.T) {
 	if err := s.checkSignature(httptest.NewRequest("GET", u.String(), nil)); err == nil {
 		t.Error("tampered URL accepted")
 	}
-	if err := s.checkSignature(httptest.NewRequest("GET", "/render?path=a/b.docx", nil)); err == nil {
+	if err := s.checkSignature(httptest.NewRequest("GET", "/render?url=https://example.com/a.docx", nil)); err == nil {
 		t.Error("unsigned URL accepted")
 	}
 }
