@@ -10,6 +10,7 @@ import (
 	"math"
 	"net/http"
 	"net/url"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"time"
@@ -156,6 +157,12 @@ func (s *Server) fromCache(w http.ResponseWriter, r *http.Request, key string, o
 			s.background.Add(1)
 			go func() {
 				defer s.background.Done()
+				// Off the request goroutine nothing else would recover: a panic here would kill the process.
+				defer func() {
+					if p := recover(); p != nil {
+						slog.Error("cache: revalidation panicked", "key", key, "panic", p, "stack", string(debug.Stack()))
+					}
+				}()
 				s.revalidate(r2, key, o)
 			}()
 		}
@@ -292,7 +299,7 @@ func (s *Server) handlePurge(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	for k := range q {
 		switch k {
-		case "s3", "url", "all", "sign":
+		case "s3", "url", "all", "sign", "exp":
 		default:
 			apierr.Write(w, &apierr.Error{Status: http.StatusBadRequest, Code: "unknown_parameter", Msg: fmt.Sprintf("unknown parameter %q: DELETE /cache takes s3=, url= or all=true", k)})
 			return

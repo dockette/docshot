@@ -71,7 +71,7 @@ func cacheServer(t *testing.T, o *origin, cacheDir string, ttl time.Duration, st
 	t.Helper()
 	// No PDFium: PNG sources never reach the rasteriser.
 	s := newServer(Config{maxBytes: 1 << 20, defaultDPI: 150, maxSide: 2000, Timeout: 30 * time.Second,
-		fetchAllow: compileAllow("^" + regexp.QuoteMeta(o.URL) + "/"), cacheMB: 16, cacheControl: "public, max-age=60", concurrency: 2, queue: 4,
+		fetchAllow: regexp.MustCompile("^" + regexp.QuoteMeta(o.URL) + "/"), fetchLoopback: true, cacheMB: 16, cacheControl: "public, max-age=60", concurrency: 2, queue: 4,
 		cacheDir: cacheDir, cacheSize: 1 << 20, cacheTTL: ttl, cacheStale: stale}, nil, nil)
 	t.Cleanup(s.Close)
 	if s.cache == nil {
