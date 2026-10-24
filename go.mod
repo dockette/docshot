@@ -1,6 +1,6 @@
 module github.com/dockette/docshot
 
-go 1.27.2
+go 1.27.3
 
 require (
 	github.com/gen2brain/webp v0.6.4
