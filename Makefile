@@ -42,7 +42,7 @@ release:          ## Set VERSION to today's date (see README → Versions)
 	while git rev-parse -q --verify "refs/tags/$$v" >/dev/null; do n=$$((n+1)); v=$$(date -u +%Y.%m.%d).$$n; done; \
 	echo "$$v" > VERSION; \
 	echo "VERSION: $(VERSION) -> $$v"; \
-	echo "next: git commit -am 'release: $$v' && git push"
+	echo "next: add a '## $$v' section to CHANGELOG.md, then git commit -am 'release: $$v' && git push"
 
 up:               ## Build (if needed) + start docshot (Gotenberg inside)
 	DOCSHOT_VERSION=$(VERSION) $(COMPOSE) up -d --build

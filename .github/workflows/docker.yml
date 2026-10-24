@@ -182,7 +182,9 @@ jobs:
             echo "Release $v already exists"
             exit 0
           fi
-          gh release create "$v" --target "$GITHUB_SHA" --title "$v" --generate-notes
+          # The CHANGELOG.md section of this version, then GitHub's generated list of changes.
+          awk -v h="## $v" '$0 == h {f = 1; next} /^## / {f = 0} f' CHANGELOG.md > notes.md
+          gh release create "$v" --target "$GITHUB_SHA" --title "$v" --notes-file notes.md --generate-notes
 
   docs:
     name: Docs

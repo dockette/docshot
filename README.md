@@ -329,15 +329,16 @@ make smoke       # render one page with the built image
 make test        # end-to-end checks
 ```
 
-Releases are dated `YYYY.MM.DD` (see [`VERSION`](VERSION)). Image tags:
+Releases are dated `YYYY.MM.DD` (see [`VERSION`](VERSION)); what changed is in [`CHANGELOG.md`](CHANGELOG.md). Image tags:
 
 | Tag | |
 |---|---|
 | `latest` | Latest `master` |
-| `2026.10.19` | A release; pin this |
+| `2026.10.24` | A release; pin this |
 | `sha-<sha>` | Exact commit |
 
-To release: run `make release`, commit and push. CI publishes the image and the GitHub release.
+To release: run `make release`, add the version's section to `CHANGELOG.md`, commit and push. CI publishes the image
+and the GitHub release, with that section as its notes.
 
 See [how to contribute](https://contributte.org/contributing.html) to this package.
 
