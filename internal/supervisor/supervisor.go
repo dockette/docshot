@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 // Supervisor runs Gotenberg as a child, pinned to loopback so the one public port is ours.
 type Supervisor struct {
 	args []string
+	pid  atomic.Int64 // the running Gotenberg; its exit status belongs to cmd.Wait
 }
 
 func New(args []string, port string) *Supervisor {
@@ -25,26 +27,27 @@ func New(args []string, port string) *Supervisor {
 	return &Supervisor{args: a}
 }
 
-// Run keeps Gotenberg alive until ctx is cancelled, restarting with backoff.
+// Run keeps Gotenberg alive until ctx is cancelled, restarting with backoff; it returns once Gotenberg is gone.
 func (s *Supervisor) Run(ctx context.Context) {
 	// Child subreaper: Gotenberg's orphaned LibreOffice/Chromium re-parent to us, not tini,
 	// so we can kill them instead of leaking a soffice.bin per crash.
 	if _, _, errno := syscall.RawSyscall(syscall.SYS_PRCTL, prSetChildSubreaper, 1, 0); errno != 0 {
 		slog.Warn("PR_SET_CHILD_SUBREAPER failed; orphans of a crashed Gotenberg may leak", "errno", errno)
 	}
-	go reapZombies(ctx)
+	go s.reapZombies(ctx)
 
 	backoff := time.Second
 	for {
 		started := time.Now()
 		cmd := exec.Command(s.args[0], s.args[1:]...)
 		cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
-		// Own process group: Chromium and LibreOffice die with Gotenberg.
+		// Own process group: Chromium and LibreOffice die with Gotenberg, and are told apart from our own tools.
 		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 		slog.Info("starting gotenberg", "cmd", strings.Join(s.args, " "))
 		if err := cmd.Start(); err != nil {
 			slog.Error("gotenberg failed to start", "err", err)
 		} else {
+			s.pid.Store(int64(cmd.Process.Pid))
 			done := make(chan error, 1)
 			go func() { done <- cmd.Wait() }()
 			select {
@@ -54,10 +57,13 @@ func (s *Supervisor) Run(ctx context.Context) {
 				case <-done:
 				case <-time.After(20 * time.Second):
 					_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+					<-done
 				}
+				s.pid.Store(0)
 				killOrphans()
 				return
 			case err := <-done:
+				s.pid.Store(0)
 				_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 				n := killOrphans()
 				metrics.GotenbergRestarts.Inc()
@@ -78,10 +84,18 @@ func (s *Supervisor) Run(ctx context.Context) {
 
 const prSetChildSubreaper = 36 // PR_SET_CHILD_SUBREAPER, linux/prctl.h
 
-// children lists our direct children from /proc: pid → state.
-func children() map[int]string {
-	self := os.Getpid()
-	out := map[int]string{}
+type proc struct {
+	state string
+	pgid  int
+}
+
+// foreignChildren lists our direct children from /proc that are not in our process group: pid → proc.
+// Gotenberg and whatever it orphans live outside our group (Setpgid, and Chromium/LibreOffice may make
+// their own); the tools docshot runs itself (ffmpeg, bsdtar…) stay in it and are waited for by os/exec,
+// so they are never killed or reaped here.
+func foreignChildren() map[int]proc {
+	self, group := strconv.Itoa(os.Getpid()), syscall.Getpgrp()
+	out := map[int]proc{}
 	entries, _ := os.ReadDir("/proc")
 	for _, e := range entries {
 		pid, err := strconv.Atoi(e.Name())
@@ -92,24 +106,28 @@ func children() map[int]string {
 		if err != nil {
 			continue
 		}
-		// pid (comm) state ppid … — comm may contain spaces, so split after ')'.
+		// pid (comm) state ppid pgrp … — comm may contain spaces, so split after ')'.
 		rest := string(stat)
 		if i := strings.LastIndexByte(rest, ')'); i >= 0 {
 			rest = rest[i+2:]
 		}
 		f := strings.Fields(rest)
-		if len(f) > 1 && f[1] == strconv.Itoa(self) {
-			out[pid] = f[0]
+		if len(f) < 3 || f[1] != self {
+			continue
+		}
+		if pgid, err := strconv.Atoi(f[2]); err == nil && pgid != group {
+			out[pid] = proc{state: f[0], pgid: pgid}
 		}
 	}
 	return out
 }
 
-// killOrphans kills and reaps leftover children; loops because kills can orphan more onto us.
+// killOrphans kills and reaps Gotenberg's leftovers; loops because kills can orphan more onto us.
+// Call it only once Gotenberg itself has been waited for.
 func killOrphans() int {
 	n := 0
 	for round := 0; round < 10; round++ {
-		kids := children()
+		kids := foreignChildren()
 		if len(kids) == 0 {
 			break
 		}
@@ -123,8 +141,8 @@ func killOrphans() int {
 	return n
 }
 
-// reapZombies reaps re-parented zombies while Gotenberg runs; it never waits on Gotenberg (cmd.Wait owns its status).
-func reapZombies(ctx context.Context) {
+// reapZombies reaps re-parented zombies while Gotenberg runs.
+func (s *Supervisor) reapZombies(ctx context.Context) {
 	t := time.NewTicker(30 * time.Second)
 	defer t.Stop()
 	for {
@@ -133,16 +151,20 @@ func reapZombies(ctx context.Context) {
 			return
 		case <-t.C:
 		}
-		for pid, state := range children() {
-			if state == "Z" && !isGotenberg(pid) {
-				var ws syscall.WaitStatus
-				_, _ = syscall.Wait4(pid, &ws, syscall.WNOHANG, nil)
-			}
-		}
+		reapOnce(int(s.pid.Load()))
 	}
 }
 
-func isGotenberg(pid int) bool {
-	comm, _ := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/comm")
-	return strings.TrimSpace(string(comm)) == "gotenberg"
+// reapOnce reaps foreign zombies except gotenberg (its status belongs to cmd.Wait); it returns how many.
+func reapOnce(gotenberg int) int {
+	n := 0
+	for pid, p := range foreignChildren() {
+		if p.state == "Z" && pid != gotenberg {
+			var ws syscall.WaitStatus
+			if got, _ := syscall.Wait4(pid, &ws, syscall.WNOHANG, nil); got == pid {
+				n++
+			}
+		}
+	}
+	return n
 }
