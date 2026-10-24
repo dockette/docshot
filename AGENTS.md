@@ -8,7 +8,7 @@ Dockette Docshot builds `dockette/docshot`, an HTTP service that renders any doc
 
 - Default image: `dockette/docshot:latest`.
 - Build context: repository root `.` with `Dockerfile` (multi-stage: `golang:1.27-trixie` build → `gotenberg/gotenberg` runtime).
-- Date versions: `VERSION` holds `YYYY.MM.DD` (`.N` for a same-day re-release), bumped by `make release`; it's built into the binary (`main.version`, via `-ldflags -X`), tags images `latest`, `<VERSION>` and `sha-<sha>`, and CI creates the matching GitHub release. See README → *Development*.
+- Date versions: `VERSION` holds `YYYY.MM.DD` (`.N` for a same-day re-release), bumped by `make release`, with a matching `## <VERSION>` section in `CHANGELOG.md` (user-facing: Breaking / Added / Fixed / Changed) that becomes the GitHub release notes; it's built into the binary (`main.version`, via `-ldflags -X`), tags images `latest`, `<VERSION>` and `sha-<sha>`, and CI creates the matching GitHub release. See README → *Development*.
 - The Go binary (no CGO, `cmd/docshot` + `internal/*`) listens on `:3000` and supervises Gotenberg as a child on `127.0.0.1:3001`; the image `CMD` is Gotenberg's own command line.
 - docshot is a child subreaper: Gotenberg runs in its own process group, and the supervisor kills/reaps only children outside docshot's group. Tools run with `os/exec` (ffmpeg, bsdtar…) must stay in docshot's group (no `Setpgid`), or a Gotenberg restart would kill them.
 - On SIGTERM, HTTP drains first (30s), then Gotenberg stops; compose's `stop_grace_period` covers both.
