@@ -7,7 +7,9 @@ import (
 	"net/http"
 	"net/url"
 	"runtime"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/dockette/docshot/internal/apierr"
 	"github.com/prometheus/client_golang/prometheus"
@@ -46,7 +48,8 @@ func buildInfo(version string) prometheus.Collector {
 }
 
 // sign = base64url(HMAC-SHA256(key, path + "?" + sorted query without sign)),
-// so strangers cannot make the box render arbitrary files or sizes.
+// so strangers cannot make the box render arbitrary files or sizes. An optional
+// exp= (Unix seconds) is signed with the rest and limits how long the URL works.
 
 func signature(key []byte, path string, q url.Values) string {
 	c := url.Values{}
@@ -69,17 +72,26 @@ func (s *Server) checkSignature(r *http.Request) error {
 	if got == "" || !hmac.Equal([]byte(got), []byte(want)) {
 		return apierr.New(http.StatusForbidden, "missing or invalid signature")
 	}
+	if exp := r.URL.Query().Get("exp"); exp != "" {
+		t, err := strconv.ParseInt(exp, 10, 64)
+		if err != nil || time.Now().Unix() > t {
+			return apierr.New(http.StatusForbidden, "signature expired")
+		}
+	}
 	return nil
 }
 
-// SignURL appends &sign=… to a path+query.
-func SignURL(key []byte, raw string) (string, error) {
+// SignURL appends &sign=… to a path+query; a ttl > 0 adds &exp= first.
+func SignURL(key []byte, raw string, ttl time.Duration) (string, error) {
 	u, err := url.Parse(raw)
 	if err != nil {
 		return "", err
 	}
 	q := u.Query()
 	q.Del("sign")
+	if ttl > 0 {
+		q.Set("exp", strconv.FormatInt(time.Now().Add(ttl).Unix(), 10))
+	}
 	q.Set("sign", signature(key, u.Path, q))
 	u.RawQuery = q.Encode()
 	return u.String(), nil

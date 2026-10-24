@@ -68,7 +68,7 @@ func TestFormatAuto(t *testing.T) {
 
 func TestSignature(t *testing.T) {
 	key := []byte("0123456789abcdef0123456789abcdef")
-	signed, err := SignURL(key, "/render?width=300&url=https://example.com/a.docx")
+	signed, err := SignURL(key, "/render?width=300&url=https://example.com/a.docx", 0)
 	if err != nil {
 		t.Fatal(err)
 	}

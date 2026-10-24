@@ -120,7 +120,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, in input, o optio
 		fail(apierr.New(http.StatusBadRequest, "empty document"))
 		return
 	}
-	content := render.Hash(string(body))
+	content := render.HashBytes(body)
 	if in.version == "" {
 		rev = "sha:" + content
 		if notModified(s.etag(content, o.Key())) {

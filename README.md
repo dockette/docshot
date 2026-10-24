@@ -149,6 +149,7 @@ curl localhost:3000/readyz
 | `name` | | Overrides the file name, and so the detected type |
 | `v` | | Cache buster; also marks the response immutable |
 | `sign` | | Signature, required when `DOCSHOT_SIGN_KEY` is set |
+| `exp` | | Unix time the signed URL stops working; signed with the rest |
 
 ### Common parameters
 
@@ -232,12 +233,14 @@ curl -i 'localhost:3000/render?s3=docs/report.docx&store=s3:replace&width=300&fo
 
 ## Configuration
 
-All settings are environment variables.
+All settings are environment variables. A value that does not parse (`DOCSHOT_TIMEOUT_SECONDS=3m`, `DOCSHOT_CACHE_TAGS=yes`)
+stops docshot at startup with a message naming the setting.
 
 > [!WARNING]
 > There is no authentication by default. Keep docshot on a private network, or set `DOCSHOT_SIGN_KEY`.
-> With a key, `GET /render*`, `GET /info` and `DELETE /cache` need a valid `?sign=` (HMAC-SHA256 of the path and query).
-> `POST /upload*` is not signed. `docshot -sign '/render?url=…'` prints a signed URL.
+> With a key, every endpoint that takes a document — `GET /render*`, `GET /info`, `POST /upload*` — and `DELETE /cache`
+> needs a valid `?sign=` (HMAC-SHA256 of the path and query). Signed uploads take their parameters from the URL only;
+> form fields are rejected. `docshot -sign '/render?url=…' -expires 24h` prints a signed URL that stops working after a day.
 
 ### General
 
@@ -250,6 +253,9 @@ All settings are environment variables.
 | `DOCSHOT_QUEUE` | `64` | Requests waiting for a slot before `429` |
 | `DOCSHOT_PDFIUM_WORKERS` | `4` | PDFium rasterizer workers |
 | `DOCSHOT_FALLBACK` | `false` | Answer errors with a placeholder image by default |
+| `DOCSHOT_SIGN_KEY` | – | Require signed URLs (see the warning above) |
+| `DOCSHOT_UPLOAD_MEMORY` | `1GB` | Uploads held in memory at once; beyond it requests wait, then `429` |
+| `DOCSHOT_LOG_FORMAT` | `text` | `text` or `json` |
 | `GOTENBERG_INTERNAL_PORT` | `3001` | Port of the bundled Gotenberg |
 | `GOTENBERG_URL` | `http://gotenberg:3000` | External Gotenberg; used only when the container is not started with Gotenberg's command line |
 
@@ -289,7 +295,7 @@ All settings are environment variables.
 
 | Env | Default | |
 |---|---|---|
-| `DOCSHOT_FETCH_ALLOW` | – | Regexp of URLs `?url=` may fetch; empty = `?url=` off |
+| `DOCSHOT_FETCH_ALLOW` | – | Regexp of URLs `?url=` may fetch, anchored at the start; empty = `?url=` off. Loopback and link-local addresses are always refused |
 | `DOCSHOT_S3_ENDPOINT` | – | S3 / MinIO endpoint; enables `?s3=` |
 | `DOCSHOT_S3_ACCESS_KEY` | – | S3 access key |
 | `DOCSHOT_S3_SECRET_KEY` | – | S3 secret key |

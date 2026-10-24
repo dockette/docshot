@@ -12,6 +12,11 @@ services:
     image: docshot:${DOCSHOT_VERSION:-dev}
     container_name: docshot
     restart: unless-stopped
+    # Drain requests (30s), then let Gotenberg stop (up to 20s) before Docker kills the container.
+    stop_grace_period: 60s
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
     ports:
       - "9994:3000"
     environment:
@@ -22,6 +27,9 @@ services:
       - DOCSHOT_MAX_PIXELS=${DOCSHOT_MAX_PIXELS:-40000000}
       - DOCSHOT_MAX_BYTES=${DOCSHOT_MAX_BYTES:-100MB}
       - DOCSHOT_TIMEOUT_SECONDS=${DOCSHOT_TIMEOUT_SECONDS:-180}
+      # Uploads held in memory at once; beyond it requests wait, then 429. Keep well under the memory limit.
+      - DOCSHOT_UPLOAD_MEMORY=${DOCSHOT_UPLOAD_MEMORY:-1GB}
+      - DOCSHOT_LOG_FORMAT=${DOCSHOT_LOG_FORMAT:-text}
       - DOCSHOT_PDFIUM_WORKERS=${DOCSHOT_PDFIUM_WORKERS:-4}
       - DOCSHOT_CACHE_MB=${DOCSHOT_CACHE_MB:-256}
       - DOCSHOT_MAX_AGE=${DOCSHOT_MAX_AGE:-3600}

@@ -4,6 +4,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -14,6 +15,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -28,6 +30,7 @@ import (
 	"github.com/minio/minio-go/v7"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"golang.org/x/sync/semaphore"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -43,10 +46,11 @@ type Config struct {
 	Timeout      time.Duration
 	workers      int
 
-	fetchAllow   *regexp.Regexp // DOCSHOT_FETCH_ALLOW: ?url= must match
-	cacheMB      int
-	cacheControl string // DOCSHOT_CACHE_CONTROL, or built from DOCSHOT_MAX_AGE
-	cdnMaxAge    int    // DOCSHOT_CDN_MAX_AGE: CDN-Cache-Control (RFC 9213); 0 = not sent
+	fetchAllow    *regexp.Regexp // DOCSHOT_FETCH_ALLOW: ?url= must match (anchored at the start)
+	fetchLoopback bool           // tests only: let ?url= reach loopback httptest servers
+	cacheMB       int
+	cacheControl  string // DOCSHOT_CACHE_CONTROL, or built from DOCSHOT_MAX_AGE
+	cdnMaxAge     int    // DOCSHOT_CDN_MAX_AGE: CDN-Cache-Control (RFC 9213); 0 = not sent
 
 	cacheDir    string        // DOCSHOT_CACHE_DIR: rendered results on disk; "" = off
 	cacheSize   int64         // DOCSHOT_CACHE_SIZE: LRU limit of the disk cache
@@ -65,14 +69,16 @@ type Config struct {
 	storePrefix   string
 	storeStrategy string
 
-	presets     map[string]url.Values // DOCSHOT_PRESETS on top of the built-ins
-	onlyPresets bool                  // DOCSHOT_ONLY_PRESETS: reject ad-hoc processing params
-	signKey     []byte                // DOCSHOT_SIGN_KEY: GET /render and /info need ?sign=
-	fallback    bool                  // DOCSHOT_FALLBACK: placeholder image instead of an error
-	concurrency int                   // DOCSHOT_CONCURRENCY: renders/conversions at once
-	queue       int                   // DOCSHOT_QUEUE: waiting requests before 429
-	maxPixels   int64                 // DOCSHOT_MAX_PIXELS: area cap of any bitmap; 0 = default
-	Version     string
+	presets      map[string]url.Values // DOCSHOT_PRESETS on top of the built-ins
+	onlyPresets  bool                  // DOCSHOT_ONLY_PRESETS: reject ad-hoc processing params
+	signKey      []byte                // DOCSHOT_SIGN_KEY: GET /render and /info need ?sign=
+	fallback     bool                  // DOCSHOT_FALLBACK: placeholder image instead of an error
+	concurrency  int                   // DOCSHOT_CONCURRENCY: renders/conversions at once
+	queue        int                   // DOCSHOT_QUEUE: waiting requests before 429
+	maxPixels    int64                 // DOCSHOT_MAX_PIXELS: area cap of any bitmap; 0 = default
+	uploadMemory int64                 // DOCSHOT_UPLOAD_MEMORY: bytes of uploads buffered at once
+	logFormat    string                // DOCSHOT_LOG_FORMAT: text or json
+	Version      string
 }
 
 func env(key, def string) string {
@@ -82,67 +88,118 @@ func env(key, def string) string {
 	return def
 }
 
-func envInt(key string, def int) int {
-	if v, err := strconv.Atoi(os.Getenv(key)); err == nil {
-		return v
+// envs parses settings; a value that does not parse is an error at startup, never a silent default.
+type envs struct{ errs []error }
+
+func (e *envs) fail(key, v, want string) {
+	e.errs = append(e.errs, fmt.Errorf("%s: %q is not %s", key, v, want))
+}
+
+// int reads a whole number of at least lo.
+func (e *envs) int(key string, def, lo int) int {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return def
 	}
-	return def
+	n, err := strconv.Atoi(v)
+	if err != nil || n < lo {
+		e.fail(key, v, fmt.Sprintf("a whole number >= %d", lo))
+		return def
+	}
+	return n
+}
+
+func (e *envs) bool(key string, def bool) bool {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return def
+	}
+	b, err := strconv.ParseBool(v)
+	if err != nil {
+		e.fail(key, v, "true or false")
+		return def
+	}
+	return b
+}
+
+func (e *envs) size(key, def string) int64 {
+	n, err := parseSize(env(key, def))
+	if err != nil {
+		e.errs = append(e.errs, fmt.Errorf("%s: %w", key, err))
+	}
+	return n
+}
+
+func (e *envs) oneOf(key, def string, allowed ...string) string {
+	v := env(key, def)
+	if !slices.Contains(allowed, v) {
+		e.fail(key, v, "one of "+strings.Join(allowed, ", "))
+		return def
+	}
+	return v
 }
 
 func LoadConfig() (Config, error) {
+	var e envs
 	cfg := Config{
-		Listen:       env("DOCSHOT_LISTEN", ":3000"), // Gotenberg's port: drop-in for its clients
-		GotenbergURL: strings.TrimRight(env("GOTENBERG_URL", "http://gotenberg:3000"), "/"),
-		defaultDPI:   envInt("DOCSHOT_DEFAULT_DPI", 150),
-		defaultW:     envInt("DOCSHOT_DEFAULT_WIDTH", 0),
-		defaultH:     envInt("DOCSHOT_DEFAULT_HEIGHT", 0),
-		maxSide:      envInt("DOCSHOT_MAX_SIDE", 10000),
-		Timeout:      time.Duration(envInt("DOCSHOT_TIMEOUT_SECONDS", 180)) * time.Second,
-		workers:      envInt("DOCSHOT_PDFIUM_WORKERS", 4),
-		fetchAllow:   compileAllow(os.Getenv("DOCSHOT_FETCH_ALLOW")),
-		cacheMB:      envInt("DOCSHOT_CACHE_MB", 256),
-		cacheControl: env("DOCSHOT_CACHE_CONTROL", "public, max-age="+strconv.Itoa(envInt("DOCSHOT_MAX_AGE", 3600))+
-			", stale-while-revalidate=86400, stale-if-error=604800"),
-		cdnMaxAge:     envInt("DOCSHOT_CDN_MAX_AGE", 0),
-		cacheStale:    os.Getenv("DOCSHOT_CACHE_STALE") != "false",
+		Listen:        env("DOCSHOT_LISTEN", ":3000"), // Gotenberg's port: drop-in for its clients
+		GotenbergURL:  strings.TrimRight(env("GOTENBERG_URL", "http://gotenberg:3000"), "/"),
+		maxBytes:      e.size("DOCSHOT_MAX_BYTES", "100MB"),
+		defaultDPI:    e.int("DOCSHOT_DEFAULT_DPI", 150, 1),
+		defaultW:      e.int("DOCSHOT_DEFAULT_WIDTH", 0, 0),
+		defaultH:      e.int("DOCSHOT_DEFAULT_HEIGHT", 0, 0),
+		maxSide:       e.int("DOCSHOT_MAX_SIDE", 10000, 1),
+		Timeout:       time.Duration(e.int("DOCSHOT_TIMEOUT_SECONDS", 180, 1)) * time.Second,
+		workers:       e.int("DOCSHOT_PDFIUM_WORKERS", 4, 1),
+		cacheMB:       e.int("DOCSHOT_CACHE_MB", 256, 0),
+		cdnMaxAge:     e.int("DOCSHOT_CDN_MAX_AGE", 0, 0),
+		cacheStale:    e.bool("DOCSHOT_CACHE_STALE", true),
 		cacheBuster:   os.Getenv("DOCSHOT_CACHE_BUSTER"),
-		cacheTags:     os.Getenv("DOCSHOT_CACHE_TAGS") == "true",
+		cacheTags:     e.bool("DOCSHOT_CACHE_TAGS", false),
 		s3Endpoint:    os.Getenv("DOCSHOT_S3_ENDPOINT"),
 		s3AccessKey:   os.Getenv("DOCSHOT_S3_ACCESS_KEY"),
 		s3SecretKey:   os.Getenv("DOCSHOT_S3_SECRET_KEY"),
 		s3Region:      os.Getenv("DOCSHOT_S3_REGION"),
-		s3SSL:         os.Getenv("DOCSHOT_S3_SSL") != "false",
+		s3SSL:         e.bool("DOCSHOT_S3_SSL", true),
 		s3Buckets:     bucketSet(splitList(os.Getenv("DOCSHOT_S3_BUCKETS"))),
 		storeBucket:   os.Getenv("DOCSHOT_STORE_BUCKET"),
 		storePrefix:   env("DOCSHOT_STORE_PREFIX", "docshot/"),
-		storeStrategy: env("DOCSHOT_STORE_STRATEGY", "append"),
-		onlyPresets:   os.Getenv("DOCSHOT_ONLY_PRESETS") == "true",
+		storeStrategy: e.oneOf("DOCSHOT_STORE_STRATEGY", "append", "append", "replace", "suffix", "hash"),
+		onlyPresets:   e.bool("DOCSHOT_ONLY_PRESETS", false),
 		signKey:       []byte(os.Getenv("DOCSHOT_SIGN_KEY")),
-		fallback:      os.Getenv("DOCSHOT_FALLBACK") == "true",
-		concurrency:   envInt("DOCSHOT_CONCURRENCY", runtime.NumCPU()),
-		queue:         envInt("DOCSHOT_QUEUE", 64),
-		maxPixels:     int64(envInt("DOCSHOT_MAX_PIXELS", 0)),
+		fallback:      e.bool("DOCSHOT_FALLBACK", false),
+		concurrency:   e.int("DOCSHOT_CONCURRENCY", runtime.NumCPU(), 1),
+		queue:         e.int("DOCSHOT_QUEUE", 64, 0),
+		maxPixels:     int64(e.int("DOCSHOT_MAX_PIXELS", 0, 0)),
+		logFormat:     e.oneOf("DOCSHOT_LOG_FORMAT", "text", "text", "json"),
 	}
+	cfg.cacheControl = env("DOCSHOT_CACHE_CONTROL", "public, max-age="+strconv.Itoa(e.int("DOCSHOT_MAX_AGE", 3600, 0))+
+		", stale-while-revalidate=86400, stale-if-error=604800")
+	cfg.uploadMemory = e.size("DOCSHOT_UPLOAD_MEMORY", "1GB")
 	cfg.cacheDir = "/tmp/docshot"
 	if v, ok := os.LookupEnv("DOCSHOT_CACHE_DIR"); ok {
 		cfg.cacheDir = v // set but empty: off
 	}
+	cfg.cacheSize = e.size("DOCSHOT_CACHE_SIZE", "10GB")
 	var err error
-	if cfg.maxBytes, err = parseSize(env("DOCSHOT_MAX_BYTES", "100MB")); err != nil {
-		return cfg, fmt.Errorf("DOCSHOT_MAX_BYTES: %w", err)
-	}
-	if cfg.cacheSize, err = parseSize(env("DOCSHOT_CACHE_SIZE", "10GB")); err != nil {
-		return cfg, fmt.Errorf("DOCSHOT_CACHE_SIZE: %w", err)
-	}
 	if cfg.cacheTTL, err = parseTTL(env("DOCSHOT_CACHE_TTL", "0")); err != nil {
-		return cfg, fmt.Errorf("DOCSHOT_CACHE_TTL: %w", err)
+		e.errs = append(e.errs, fmt.Errorf("DOCSHOT_CACHE_TTL: %w", err))
 	}
-	presets, err := parsePresets(os.Getenv("DOCSHOT_PRESETS"))
-	if err != nil {
-		return cfg, fmt.Errorf("DOCSHOT_PRESETS: %w", err)
+	if cfg.fetchAllow, err = compileAllow(os.Getenv("DOCSHOT_FETCH_ALLOW")); err != nil {
+		e.errs = append(e.errs, fmt.Errorf("DOCSHOT_FETCH_ALLOW: %w", err))
 	}
-	cfg.presets = presets
-	return cfg, nil
+	if cfg.presets, err = parsePresets(os.Getenv("DOCSHOT_PRESETS")); err != nil {
+		e.errs = append(e.errs, fmt.Errorf("DOCSHOT_PRESETS: %w", err))
+	}
+	return cfg, errors.Join(e.errs...)
+}
+
+// LogHandler is the slog handler DOCSHOT_LOG_FORMAT asks for.
+func (cfg Config) LogHandler(w io.Writer) slog.Handler {
+	if cfg.logFormat == "json" {
+		return slog.NewJSONHandler(w, nil)
+	}
+	return slog.NewTextHandler(w, nil)
 }
 
 func New(cfg Config) (*Server, error) {
@@ -162,9 +219,11 @@ func New(cfg Config) (*Server, error) {
 }
 
 func newServer(cfg Config, raster *imaging.Rasterizer, s3c *minio.Client) *Server {
+	cfg.uploadMemory = max(cfg.uploadMemory, cfg.maxBytes) // uploads are buffered whole: the largest must fit
 	rc := render.Config{GotenbergURL: cfg.GotenbergURL, MaxBytes: cfg.maxBytes, MaxSide: cfg.maxSide,
 		Timeout: cfg.Timeout, CacheMB: cfg.cacheMB, Concurrency: cfg.concurrency, Queue: cfg.queue}
-	s := &Server{cfg: cfg, render: render.New(rc, raster), s3: s3c}
+	s := &Server{cfg: cfg, render: render.New(rc, raster), s3: s3c, fetch: newFetchClient(cfg),
+		uploads: semaphore.NewWeighted(cfg.uploadMemory)}
 	if cfg.cacheDir != "" && cfg.cacheSize > 0 {
 		// A cache that cannot be written is not worth failing the service for.
 		var err error
@@ -230,9 +289,12 @@ func (s *Server) Handler() http.Handler {
 type Server struct {
 	cfg    Config
 	render *render.Renderer
-	s3     *minio.Client    // nil unless DOCSHOT_S3_ENDPOINT is set
-	cache  *diskcache.Cache // nil unless DOCSHOT_CACHE_DIR is usable
-	reg    *prometheus.Registry
+	s3     *minio.Client // nil unless DOCSHOT_S3_ENDPOINT is set
+	fetch  *http.Client  // ?url= sources
+	// uploads bounds the bytes of request bodies held in memory at once (DOCSHOT_UPLOAD_MEMORY).
+	uploads *semaphore.Weighted
+	cache   *diskcache.Cache // nil unless DOCSHOT_CACHE_DIR is usable
+	reg     *prometheus.Registry
 
 	revalidating singleflight.Group // background re-checks of stale entries, one per key
 	background   sync.WaitGroup
@@ -274,14 +336,45 @@ func filenameHint(r *http.Request) string {
 }
 
 // readUpload reads multipart (first file part; other fields act as query
-// parameters) or a raw body named by Content-Disposition / ?name=.
-func (s *Server) readUpload(r *http.Request) (input, error) {
+// parameters) or a raw body named by Content-Disposition / ?name=. The body
+// counts against DOCSHOT_UPLOAD_MEMORY until release is called.
+func (s *Server) readUpload(w http.ResponseWriter, r *http.Request) (in input, release func(), err error) {
+	// Multipart framing and form fields ride on top of the document.
+	limit := s.cfg.maxBytes + 1<<20
+	if r.ContentLength > limit {
+		return input{}, nil, apierr.New(http.StatusRequestEntityTooLarge, "file larger than %d bytes", s.cfg.maxBytes)
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, limit)
+	reserved := s.cfg.maxBytes
+	if r.ContentLength > 0 {
+		reserved = min(r.ContentLength, s.cfg.maxBytes)
+	}
+	wait, cancel := context.WithTimeout(r.Context(), s.cfg.Timeout)
+	defer cancel()
+	if err := s.uploads.Acquire(wait, reserved); err != nil {
+		metrics.Rejected.Inc()
+		return input{}, nil, apierr.New(http.StatusTooManyRequests, "busy: %d bytes of uploads in memory (DOCSHOT_UPLOAD_MEMORY)", s.cfg.uploadMemory)
+	}
+	held := reserved
+	free := func() { s.uploads.Release(held) }
+	defer func() {
+		if err != nil {
+			free()
+		}
+	}()
+	tooLarge := func(err error) error {
+		if mbe := (*http.MaxBytesError)(nil); errors.As(err, &mbe) {
+			return apierr.New(http.StatusRequestEntityTooLarge, "file larger than %d bytes", s.cfg.maxBytes)
+		}
+		return nil
+	}
+
 	var body []byte
 	var name string
 	if mt, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type")); mt == "multipart/form-data" {
 		mr, err := r.MultipartReader()
 		if err != nil {
-			return input{}, apierr.New(http.StatusBadRequest, "multipart: %v", err)
+			return input{}, nil, apierr.New(http.StatusBadRequest, "multipart: %v", err)
 		}
 		q := r.URL.Query()
 		for {
@@ -290,9 +383,16 @@ func (s *Server) readUpload(r *http.Request) (input, error) {
 				break
 			}
 			if err != nil {
-				return input{}, apierr.New(http.StatusBadRequest, "multipart: %v", err)
+				if e := tooLarge(err); e != nil {
+					return input{}, nil, e
+				}
+				return input{}, nil, apierr.New(http.StatusBadRequest, "multipart: %v", err)
 			}
 			if part.FileName() == "" {
+				if len(s.cfg.signKey) > 0 {
+					// The signature covers the URL only; a form field would change the request unsigned.
+					return input{}, nil, apierr.New(http.StatusBadRequest, "form field %q: with DOCSHOT_SIGN_KEY, put parameters in the signed URL", part.FormName())
+				}
 				v, _ := io.ReadAll(io.LimitReader(part, 4096))
 				if !q.Has(part.FormName()) { // the URL wins over the form
 					q.Set(part.FormName(), string(v))
@@ -304,17 +404,22 @@ func (s *Server) readUpload(r *http.Request) (input, error) {
 			}
 			name = filepath.Base(part.FileName())
 			if body, err = io.ReadAll(io.LimitReader(part, s.cfg.maxBytes+1)); err != nil {
-				return input{}, apierr.New(http.StatusBadRequest, "reading upload: %v", err)
+				if e := tooLarge(err); e != nil {
+					return input{}, nil, e
+				}
+				return input{}, nil, apierr.New(http.StatusBadRequest, "reading upload: %v", err)
 			}
 		}
 		r.URL.RawQuery = q.Encode()
 		if body == nil {
-			return input{}, apierr.New(http.StatusBadRequest, "multipart upload has no file part (curl -F file=@doc.pdf)")
+			return input{}, nil, apierr.New(http.StatusBadRequest, "multipart upload has no file part (curl -F file=@doc.pdf)")
 		}
 	} else {
-		var err error
 		if body, err = io.ReadAll(io.LimitReader(r.Body, s.cfg.maxBytes+1)); err != nil {
-			return input{}, apierr.New(http.StatusBadRequest, "reading body: %v", err)
+			if e := tooLarge(err); e != nil {
+				return input{}, nil, e
+			}
+			return input{}, nil, apierr.New(http.StatusBadRequest, "reading body: %v", err)
 		}
 		name = filenameHint(r)
 	}
@@ -322,21 +427,32 @@ func (s *Server) readUpload(r *http.Request) (input, error) {
 		name = filepath.Base(n)
 	}
 	if int64(len(body)) > s.cfg.maxBytes {
-		return input{}, apierr.New(http.StatusRequestEntityTooLarge, "file larger than %d bytes", s.cfg.maxBytes)
+		return input{}, nil, apierr.New(http.StatusRequestEntityTooLarge, "file larger than %d bytes", s.cfg.maxBytes)
 	}
 	if len(body) == 0 {
-		return input{}, apierr.New(http.StatusBadRequest, "empty upload: curl -F file=@doc.pdf …/upload")
+		return input{}, nil, apierr.New(http.StatusBadRequest, "empty upload: curl -F file=@doc.pdf …/upload")
 	}
-	return input{name: name, source: "upload", load: func(context.Context) ([]byte, error) { return body, nil }}, nil
+	// Keep only what the body really holds.
+	if n := int64(len(body)); n < held {
+		s.uploads.Release(held - n)
+		held = n
+	}
+	return input{name: name, source: "upload", load: func(context.Context) ([]byte, error) { return body, nil }}, free, nil
 }
 
 func (s *Server) handleUpload(op string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		in, err := s.readUpload(r) // first: multipart fields may carry parameters
+		// Before reading the body: the signature covers the URL as sent.
+		if err := s.checkSignature(r); err != nil {
+			apierr.Write(w, err)
+			return
+		}
+		in, release, err := s.readUpload(w, r) // then: multipart fields may carry parameters
 		if err != nil {
 			apierr.Write(w, err)
 			return
 		}
+		defer release()
 		opts, err := s.parseOpts(r, op)
 		if err != nil {
 			apierr.Write(w, err)
@@ -432,11 +548,16 @@ func (s *Server) handleInfo(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleUploadInfo(w http.ResponseWriter, r *http.Request) {
-	in, err := s.readUpload(r)
+	if err := s.checkSignature(r); err != nil {
+		apierr.Write(w, err)
+		return
+	}
+	in, release, err := s.readUpload(w, r)
 	if err != nil {
 		apierr.Write(w, err)
 		return
 	}
+	defer release()
 	s.writeInfo(w, r, in)
 }
 
