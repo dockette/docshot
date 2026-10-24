@@ -94,3 +94,13 @@ func TestContentLines(t *testing.T) {
 		t.Errorf("unfolding/unescaping: %#v", got)
 	}
 }
+
+// A header claiming 4 GiB must not allocate it.
+func TestDecompressRTFHugeClaim(t *testing.T) {
+	b := []byte{0x20, 0, 0, 0, 0xff, 0xff, 0xff, 0xff, 'L', 'Z', 'F', 'u', 0, 0, 0, 0, 0x00, 'a', 'b'}
+	allocs := testing.AllocsPerRun(1, func() { _, _ = decompressRTF(b) })
+	out, err := decompressRTF(b)
+	if err != nil || cap(out) > 1<<10 || allocs > 4 {
+		t.Fatalf("cap %d, err %v, allocs %v", cap(out), err, allocs)
+	}
+}

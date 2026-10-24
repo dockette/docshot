@@ -354,7 +354,13 @@ func looksLikeEmail(t string) bool {
 
 // sniffOLE tells legacy Office files and Outlook messages apart by their
 // top-level Compound File streams.
-func sniffOLE(b []byte) string {
+func sniffOLE(b []byte) (ext string) {
+	// mscfb panics on some malformed headers (found by FuzzDetect): treat them as not OLE.
+	defer func() {
+		if recover() != nil {
+			ext = ""
+		}
+	}()
 	r, err := mscfb.New(bytes.NewReader(b))
 	if err != nil {
 		return ""
