@@ -46,6 +46,7 @@ Versions are release dates (`YYYY.MM.DD`, `.N` for a same-day re-release); each 
 - Upload bodies and form fields are bounded; slow uploads time out.
 - Documents are no longer copied twice in memory on their way to Gotenberg.
 - ffmpeg: a truncated JPEG XL no longer loops at 100% CPU or panics; stderr is capped at 4 KiB.
+- Built with Go 1.27.3: `crypto/x509` fix for CVE-2026-111943 (GO-2026-6809).
 
 ### Changed
 
