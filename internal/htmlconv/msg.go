@@ -48,7 +48,13 @@ type msgAttachment struct {
 	data            []byte
 }
 
-func MsgToHTML(raw []byte) (string, error) {
+func MsgToHTML(raw []byte) (page string, err error) {
+	// mscfb panics on some malformed headers.
+	defer func() {
+		if p := recover(); p != nil {
+			page, err = "", apierr.New(http.StatusUnprocessableEntity, "not an Outlook message: %v", p)
+		}
+	}()
 	r, err := mscfb.New(bytes.NewReader(raw))
 	if err != nil {
 		return "", apierr.New(http.StatusUnprocessableEntity, "not an Outlook message: %v", err)
@@ -190,8 +196,10 @@ func decompressRTF(b []byte) ([]byte, error) {
 	var dict [4096]byte
 	copy(dict[:], rtfPrebuf)
 	wpos := len(rtfPrebuf)
-	out := make([]byte, 0, rawSize)
 	in := b[16:]
+	// rawSize is the file's own claim (up to 4 GiB); LZFu expands at most 8x
+	// (a control byte and 8 two-byte references of 17 bytes each).
+	out := make([]byte, 0, min(int64(rawSize), 8*int64(len(in))+16))
 	for i := 0; i < len(in); {
 		ctrl := in[i]
 		i++

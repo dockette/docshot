@@ -1,7 +1,6 @@
 package render
 
 import (
-	"bytes"
 	"context"
 	"io"
 	"mime/multipart"
@@ -114,6 +113,24 @@ func (r *Renderer) chromiumHTML(ctx context.Context, page string) ([]byte, error
 	return r.gotenberg(ctx, "/forms/chromium/convert/html", map[string][]byte{"index.html": []byte(page)}, a4())
 }
 
+func writeForm(mw *multipart.Writer, files map[string][]byte, fields map[string]string) error {
+	for name, data := range files {
+		fw, err := mw.CreateFormFile("files", name)
+		if err != nil {
+			return err
+		}
+		if _, err := fw.Write(data); err != nil {
+			return err
+		}
+	}
+	for k, v := range fields {
+		if err := mw.WriteField(k, v); err != nil {
+			return err
+		}
+	}
+	return mw.Close()
+}
+
 // a4 overrides Gotenberg's Letter default.
 func a4() map[string]string {
 	return map[string]string{
@@ -124,28 +141,15 @@ func a4() map[string]string {
 }
 
 func (r *Renderer) gotenberg(ctx context.Context, route string, files map[string][]byte, fields map[string]string) ([]byte, error) {
-	var buf bytes.Buffer
-	mw := multipart.NewWriter(&buf)
-	for name, data := range files {
-		fw, err := mw.CreateFormFile("files", name)
-		if err != nil {
-			return nil, err
-		}
-		if _, err := fw.Write(data); err != nil {
-			return nil, err
-		}
-	}
-	for k, v := range fields {
-		if err := mw.WriteField(k, v); err != nil {
-			return nil, err
-		}
-	}
-	if err := mw.Close(); err != nil {
-		return nil, err
-	}
+	// Streamed: no second document-sized buffer. The transport closes pr when the
+	// request ends, which stops the writer on errors too.
+	pr, pw := io.Pipe()
+	mw := multipart.NewWriter(pw)
+	go func() { pw.CloseWithError(writeForm(mw, files, fields)) }()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, r.cfg.GotenbergURL+route, &buf)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, r.cfg.GotenbergURL+route, pr)
 	if err != nil {
+		pr.Close()
 		return nil, err
 	}
 	req.Header.Set("Content-Type", mw.FormDataContentType())

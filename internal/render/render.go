@@ -8,9 +8,11 @@ import (
 	"log/slog"
 	"net/http"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"time"
 
+	"github.com/dockette/docshot/internal/apierr"
 	"github.com/dockette/docshot/internal/detect"
 	"github.com/dockette/docshot/internal/imaging"
 	"github.com/dockette/docshot/internal/lru"
@@ -91,6 +93,14 @@ func Hash(parts ...string) string {
 	return hex.EncodeToString(h.Sum(nil))[:32]
 }
 
+// HashBytes is Hash(string(b)) without copying a document-sized b into a string.
+func HashBytes(b []byte) string {
+	h := sha256.New()
+	h.Write(b)
+	h.Write([]byte{0})
+	return hex.EncodeToString(h.Sum(nil))[:32]
+}
+
 // Render goes memory cache, then singleflight document cache, then render.
 // Shared work uses a detached context so one client hanging up cannot fail the others.
 func (r *Renderer) Render(content, name string, body []byte, o Options) (Result, string, error) {
@@ -100,7 +110,7 @@ func (r *Renderer) Render(content, name string, body []byte, o Options) (Result,
 		return res, "memory", nil
 	}
 	state, leader := "miss", false
-	v, err, _ := r.cache.flight.Do("img:"+imgKey, func() (any, error) {
+	v, err, _ := r.cache.flight.Do("img:"+imgKey, safely(func() (any, error) {
 		leader = true
 		work, cancel := context.WithTimeout(context.Background(), r.cfg.Timeout)
 		defer cancel()
@@ -129,7 +139,7 @@ func (r *Renderer) Render(content, name string, body []byte, o Options) (Result,
 		}
 		r.cache.images.Put(imgKey, res)
 		return res, nil
-	})
+	}))
 	if !leader {
 		state = "shared"
 	}
@@ -145,7 +155,7 @@ func (r *Renderer) document(ctx context.Context, content, name string, body []by
 	if doc, ok := r.cache.docs.Get(docKey); ok {
 		return doc, true, nil
 	}
-	d, err, _ := r.cache.flight.Do("doc:"+docKey, func() (any, error) {
+	d, err, _ := r.cache.flight.Do("doc:"+docKey, safely(func() (any, error) {
 		k := detect.Detect(name, body)
 		switch k.Route {
 		case detect.Image, detect.Video, detect.Archive, detect.Audio, detect.Raw:
@@ -179,7 +189,7 @@ func (r *Renderer) document(ctx context.Context, content, name string, body []by
 		entry := docEntry{pdf: pdf, kind: k, path: path}
 		r.cache.docs.Put(docKey, entry)
 		return entry, nil
-	})
+	}))
 	if err != nil {
 		return docEntry{}, false, err
 	}
@@ -187,6 +197,20 @@ func (r *Renderer) document(ctx context.Context, content, name string, body []by
 }
 
 type slotHeld struct{}
+
+// safely turns a panic in a parser or the rasteriser into a 500 for this document,
+// instead of a dropped connection (or a crash, off the request goroutine).
+func safely(fn func() (any, error)) func() (any, error) {
+	return func() (v any, err error) {
+		defer func() {
+			if p := recover(); p != nil {
+				slog.Error("render panicked", "panic", p, "stack", string(debug.Stack()))
+				v, err = nil, apierr.New(http.StatusInternalServerError, "internal error while rendering")
+			}
+		}()
+		return fn()
+	}
+}
 
 // TypeLabel is the input type as a metric label: unrecognised extensions are "other", so uploads cannot grow the series set.
 func TypeLabel(k detect.Kind) string {
