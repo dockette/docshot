@@ -10,6 +10,8 @@ Dockette Docshot builds `dockette/docshot`, an HTTP service that renders any doc
 - Build context: repository root `.` with `Dockerfile` (multi-stage: `golang:1.27-trixie` build → `gotenberg/gotenberg` runtime).
 - Date versions: `VERSION` holds `YYYY.MM.DD` (`.N` for a same-day re-release), bumped by `make release`; it's built into the binary (`main.version`, via `-ldflags -X`), tags images `latest`, `<VERSION>` and `sha-<sha>`, and CI creates the matching GitHub release. See README → *Development*.
 - The Go binary (no CGO, `cmd/docshot` + `internal/*`) listens on `:3000` and supervises Gotenberg as a child on `127.0.0.1:3001`; the image `CMD` is Gotenberg's own command line.
+- docshot is a child subreaper: Gotenberg runs in its own process group, and the supervisor kills/reaps only children outside docshot's group. Tools run with `os/exec` (ffmpeg, bsdtar…) must stay in docshot's group (no `Setpgid`), or a Gotenberg restart would kill them.
+- On SIGTERM, HTTP drains first (30s), then Gotenberg stops; compose's `stop_grace_period` covers both.
 
 ## Layout
 
@@ -22,7 +24,7 @@ Dockette Docshot builds `dockette/docshot`, an HTTP service that renders any doc
 - `internal/htmlconv` — formats rendered as an HTML page: e-mail, Outlook msg, EPUB, CSV, JSON, notebooks, calendars, contacts, fonts, SVG, text.
 - `internal/diskcache` — byte-bounded LRU of rendered results on disk (`DOCSHOT_CACHE_DIR`), index rebuilt on start; `internal/server/cache.go` keys it by URL and handles ETag/TTL/purge.
 - `internal/apierr`, `internal/metrics`, `internal/lru`, `internal/supervisor` — JSON errors, Prometheus collectors (client_golang), byte-bounded LRU, child-process supervision.
-- GitHub Actions runs lint + unit tests, a smoke test of the built image, then publishes `linux/amd64,linux/arm64` on `master` and the weekly schedule, and creates a GitHub release when `VERSION` is new.
+- GitHub Actions (actions pinned to commit SHAs, kept current by Dependabot) runs lint + unit tests, a smoke test and an informational Trivy scan of the built image, then publishes (with SBOM, provenance and a keyless cosign signature) `linux/amd64,linux/arm64` on `master` and the weekly schedule, and creates a GitHub release when `VERSION` is new.
 
 ## Commands
 
@@ -38,6 +40,8 @@ Dockette Docshot builds `dockette/docshot`, an HTTP service that renders any doc
 
 - Always build Go with `-tags nodynamic` (go-pdfium WebAssembly backend, no CGO).
 - Run `make test-unit` after Go changes and `make smoke` after Dockerfile changes.
+- Parsers of untrusted input have fuzz targets (`FuzzDetect`, `FuzzEmail`, `FuzzMsg`, `FuzzRTF`, `FuzzEPUB`, `FuzzStructured`); seeds and found crashers in `testdata/fuzz` run with the unit tests. Fuzz after parser changes, e.g. `go test -tags nodynamic -run '^$' -fuzz '^FuzzMsg$' -fuzztime 1m ./internal/htmlconv`.
+- Settings are parsed strictly in `LoadConfig` (`envs`): a new setting goes through it, never a bare `os.Getenv` + silent default.
 - `.env.dist` is the compose config template; copy it to `.env` (git-ignored).
 
 ## Guidelines

@@ -20,7 +20,7 @@ test-unit:        ## Go vet + unit tests (in a golang container)
 	$(GO_DOCKER) sh -c 'go vet -tags nodynamic ./... && go test -tags nodynamic -race ./...'
 
 lint:             ## gofmt, staticcheck, govulncheck, shellcheck, hadolint
-	$(GO_DOCKER) sh -c 'test -z "$$(gofmt -l .)" && go run honnef.co/go/tools/cmd/staticcheck@452d5bb86b45 -tags nodynamic ./... && go run golang.org/x/vuln/cmd/govulncheck@latest -tags nodynamic ./...'
+	$(GO_DOCKER) sh -c 'test -z "$$(gofmt -l .)" && go run honnef.co/go/tools/cmd/staticcheck@452d5bb86b45 -tags nodynamic ./... && go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 -tags nodynamic ./...'
 	docker run --rm -v $(CURDIR):/mnt -w /mnt koalaman/shellcheck:stable -S warning docshot.sh test/formats/gen.sh
 	docker run --rm -i -v $(CURDIR)/.hadolint.yaml:/.config/hadolint.yaml:ro hadolint/hadolint < Dockerfile
 
