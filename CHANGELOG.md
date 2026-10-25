@@ -3,7 +3,13 @@
 Versions are release dates (`YYYY.MM.DD`, `.N` for a same-day re-release); each one is the
 `dockette/docshot:<version>` image and the GitHub release of the same name. See README → *Versions*.
 
-## Unreleased
+## 2026.10.25
+
+### Fixed
+
+- Images are detected by content when the extension is wrong or missing (`image.php`, `scan.pdf`
+  holding a PNG/JPEG/GIF/BMP/WebP/TIFF…): they render as images instead of text or a failed
+  conversion. RAW camera files keep their extension.
 
 ### Changed
 
