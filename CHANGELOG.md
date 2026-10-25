@@ -3,6 +3,16 @@
 Versions are release dates (`YYYY.MM.DD`, `.N` for a same-day re-release); each one is the
 `dockette/docshot:<version>` image and the GitHub release of the same name. See README → *Versions*.
 
+## Unreleased
+
+### Changed
+
+- The image applies Debian security updates on top of the Gotenberg base at build time, and so on
+  every weekly rebuild: 659 fixable HIGH/CRITICAL CVEs in Chromium, LibreOffice, OpenSSL… down to 0.
+- The image is a single flattened layer, so upgraded packages replace the base's copies instead of
+  stacking on them: 2.75 GB (layered with the upgrade it would be 3.99 GB). A pull downloads the
+  whole layer once per release instead of sharing layers with `gotenberg/gotenberg`.
+
 ## 2026.10.24
 
 ### Breaking
