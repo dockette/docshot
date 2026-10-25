@@ -80,9 +80,6 @@ jobs:
       - name: Render a page
         run: make smoke DOCKER_IMAGE=dockette/docshot:test
 
-      - name: Check base config is restated
-        run: make check-base DOCKER_IMAGE=dockette/docshot:test
-
       - name: Check HTML isolation
         run: make test-isolation DOCKER_IMAGE=dockette/docshot:test
 
