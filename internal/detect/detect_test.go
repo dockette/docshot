@@ -49,3 +49,32 @@ func TestDetectPostScript(t *testing.T) {
 		t.Errorf("EPS without a name → %s/%s", k.Ext, k.Route)
 	}
 }
+
+func TestDetectImageBehindWrongExtension(t *testing.T) {
+	png := []byte("\x89PNG\r\n\x1a\n\x00\x00")
+	jpg := []byte{0xff, 0xd8, 0xff, 0xe0, 0, 0}
+	bmp := append([]byte("BM\x00\x00\x00\x00\x00\x00\x00\x00\x36\x00\x00\x00"), 40, 0, 0, 0)
+	for name, tc := range map[string]struct {
+		body []byte
+		ext  string
+	}{
+		"image.php": {png, "png"}, "photo.txt": {jpg, "jpg"}, "noext": {png, "png"},
+		"scan.pdf": {png, "png"}, "photo.html": {jpg, "jpg"}, "pic.json": {png, "png"},
+		"doc.docx": {jpg, "jpg"}, "clip.mp4": {png, "png"}, "a.csv": {bmp, "bmp"},
+		"x.tif": {png, "png"},
+	} {
+		if k := Detect(name, tc.body); k.Ext != tc.ext || k.Route != Image {
+			t.Errorf("%s → %s/%s, want %s/image", name, k.Ext, k.Route, tc.ext)
+		}
+	}
+	if k := Detect("index.php", []byte("<?php echo 1;")); k.Route != Text {
+		t.Errorf("php source → %s, want text", k.Route)
+	}
+	if k := Detect("notes.md", []byte("BMW service notes, long enough to pass.\n")); k.Route != Markdown {
+		t.Errorf("text starting with BM → %s, want markdown", k.Route)
+	}
+	// RAW files carry TIFF magic and must stay RAW.
+	if k := Detect("shot.nef", []byte("II*\x00\x08\x00\x00\x00")); k.Route != Raw {
+		t.Errorf("nef → %s, want raw", k.Route)
+	}
+}

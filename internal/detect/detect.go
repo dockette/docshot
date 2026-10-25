@@ -186,6 +186,15 @@ func detectKind(name string, body []byte) Kind {
 		ext = base
 	}
 	if r, ok := routeForExt(ext); ok {
+		// An image behind the wrong extension (image.php, photo.pdf) is still an image.
+		// RAW files are TIFF-shaped, so they keep their extension.
+		if r != Raw {
+			if ext2 := sniffImage(body); ext2 != "" {
+				if r2, ok := routeForExt(ext2); ok && r2 != r {
+					return Kind{Ext: ext2, Route: r2}
+				}
+			}
+		}
 		return Kind{Ext: ext, Route: r}
 	}
 	if ext2 := sniff(body); ext2 != "" {
@@ -210,24 +219,48 @@ func head(b []byte, n int) []byte {
 	return b[:n]
 }
 
-// sniff recognises formats by magic bytes; "" when unsure.
-func sniff(b []byte) string {
+// sniffImage recognises raster images by magic bytes; "" when it is none.
+func sniffImage(b []byte) string {
 	h := head(b, 512)
 	switch {
-	case bytes.HasPrefix(h, []byte("%PDF-")):
-		return "pdf"
 	case bytes.HasPrefix(h, []byte("\x89PNG\r\n\x1a\n")):
 		return "png"
 	case bytes.HasPrefix(h, []byte{0xff, 0xd8, 0xff}):
 		return "jpg"
 	case bytes.HasPrefix(h, []byte("GIF87a")), bytes.HasPrefix(h, []byte("GIF89a")):
 		return "gif"
-	case bytes.HasPrefix(h, []byte("BM")) && len(h) > 14:
+	case isBMP(h):
 		return "bmp"
 	case bytes.HasPrefix(h, []byte("II*\x00")), bytes.HasPrefix(h, []byte("MM\x00*")):
 		return "tiff"
 	case len(h) > 12 && bytes.HasPrefix(h, []byte("RIFF")) && string(h[8:12]) == "WEBP":
 		return "webp"
+	}
+	return ""
+}
+
+// isBMP checks the file header's reserved field and the DIB header size, so
+// text starting with "BM" is not taken for a bitmap.
+func isBMP(h []byte) bool {
+	if len(h) < 18 || !bytes.HasPrefix(h, []byte("BM")) || h[6] != 0 || h[7] != 0 || h[8] != 0 || h[9] != 0 {
+		return false
+	}
+	switch h[14] {
+	case 12, 40, 52, 56, 64, 108, 124:
+		return h[15] == 0 && h[16] == 0 && h[17] == 0
+	}
+	return false
+}
+
+// sniff recognises formats by magic bytes; "" when unsure.
+func sniff(b []byte) string {
+	h := head(b, 512)
+	if ext := sniffImage(b); ext != "" {
+		return ext
+	}
+	switch {
+	case bytes.HasPrefix(h, []byte("%PDF-")):
+		return "pdf"
 	case bytes.HasPrefix(h, []byte("%!PS")):
 		if line, _, _ := bytes.Cut(h, []byte("\n")); bytes.Contains(line, []byte("EPSF")) {
 			return "eps"
