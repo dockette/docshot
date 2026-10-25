@@ -5,7 +5,7 @@ DOCKER_IMAGE ?= dockette/docshot:latest
 VERSION := $(shell cat VERSION)
 
 .DEFAULT_GOAL := up
-.PHONY: test-formats build run up down restart logs ps validate test test-params test-all formats test-unit lint smoke version release
+.PHONY: test-formats build run up down restart logs ps validate test test-params test-all formats test-unit lint smoke test-isolation version release
 
 build:            ## Build the public image (docker buildx)
 	docker buildx build --build-arg VERSION=$(VERSION) -t ${DOCKER_IMAGE} .
@@ -21,7 +21,7 @@ test-unit:        ## Go vet + unit tests (in a golang container)
 
 lint:             ## gofmt, staticcheck, govulncheck, shellcheck, hadolint
 	$(GO_DOCKER) sh -c 'test -z "$$(gofmt -l .)" && go run honnef.co/go/tools/cmd/staticcheck@452d5bb86b45 -tags nodynamic ./... && go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 -tags nodynamic ./...'
-	docker run --rm -v $(CURDIR):/mnt -w /mnt koalaman/shellcheck:stable -S warning docshot.sh test/formats/gen.sh
+	docker run --rm -v $(CURDIR):/mnt -w /mnt koalaman/shellcheck:stable -S warning docshot.sh test/formats/gen.sh test/isolation.sh
 	docker run --rm -i -v $(CURDIR)/.hadolint.yaml:/.config/hadolint.yaml:ro hadolint/hadolint < Dockerfile
 
 smoke:            ## Start the public image, wait for /readyz, render Markdown to PNG
@@ -29,6 +29,9 @@ smoke:            ## Start the public image, wait for /readyz, render Markdown t
 	for i in $$(seq 1 60); do curl -fsS -m 2 http://localhost:39994/readyz >/dev/null 2>&1 && break; sleep 2; done; \
 	ct=$$(printf '# docshot\n\nsmoke test\n' | curl -sS -m 120 -o /dev/null -w '%{http_code} %{content_type}' --data-binary @- 'http://localhost:39994/upload?name=smoke.md'); \
 	docker rm -f docshot-smoke >/dev/null; echo "smoke: $$ct"; [ "$$ct" = "200 image/png" ]
+
+test-isolation:   ## Untrusted HTML: no JavaScript, no remote fetches (starts ${DOCKER_IMAGE})
+	test/isolation.sh ${DOCKER_IMAGE}
 
 version:          ## Print VERSION
 	@echo $(VERSION)
