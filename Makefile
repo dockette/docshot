@@ -5,7 +5,7 @@ DOCKER_IMAGE ?= dockette/docshot:latest
 VERSION := $(shell cat VERSION)
 
 .DEFAULT_GOAL := up
-.PHONY: test-formats build run up down restart logs ps validate test test-params test-all formats test-unit lint smoke test-isolation version release
+.PHONY: test-formats build run up down restart logs ps validate test test-params test-all formats test-unit lint smoke test-isolation check-base version release
 
 build:            ## Build the public image (docker buildx)
 	docker buildx build --build-arg VERSION=$(VERSION) -t ${DOCKER_IMAGE} .
@@ -30,6 +30,16 @@ smoke:            ## Start the public image, wait for /readyz, render Markdown t
 	ct=$$(printf '# docshot\n\nsmoke test\n' | curl -sS -m 120 -o /dev/null -w '%{http_code} %{content_type}' --data-binary @- 'http://localhost:39994/upload?name=smoke.md'); \
 	docker rm -f docshot-smoke >/dev/null; echo "smoke: $$ct"; [ "$$ct" = "200 image/png" ]
 
+# The image is flattened FROM scratch, which drops the base image's config: fail when Gotenberg
+# has ENV entries or a WORKDIR the Dockerfile does not restate (e.g. after a GOTENBERG_VERSION bump).
+check-base:       ## ${DOCKER_IMAGE} keeps every ENV and the WORKDIR of its Gotenberg base
+	@v=$$(sed -n 's/^ARG GOTENBERG_VERSION=//p' Dockerfile); base=gotenberg/gotenberg:$$v; docker pull -q $$base >/dev/null; \
+	env='{{range .Config.Env}}{{println .}}{{end}}'; \
+	missing=$$(docker image inspect --format "$$env" $$base | grep -vxF "$$(docker image inspect --format "$$env" ${DOCKER_IMAGE})"); \
+	wb=$$(docker image inspect --format '{{.Config.WorkingDir}}' $$base); wo=$$(docker image inspect --format '{{.Config.WorkingDir}}' ${DOCKER_IMAGE}); \
+	if [ -n "$$missing" ] || [ "$$wb" != "$$wo" ]; then echo "check-base: $$base config not restated in the Dockerfile:"; printf '  ENV %s\n' $$missing; [ "$$wb" = "$$wo" ] || echo "  WORKDIR $$wb (ours: $$wo)"; exit 1; fi; \
+	echo "check-base: ${DOCKER_IMAGE} keeps the config of $$base"
+
 test-isolation:   ## Untrusted HTML: no JavaScript, no remote fetches (starts ${DOCKER_IMAGE})
 	test/isolation.sh ${DOCKER_IMAGE}
 
@@ -45,7 +55,7 @@ release:          ## Set VERSION to today's date (see README → Versions)
 	while git rev-parse -q --verify "refs/tags/$$v" >/dev/null; do n=$$((n+1)); v=$$(date -u +%Y.%m.%d).$$n; done; \
 	echo "$$v" > VERSION; \
 	echo "VERSION: $(VERSION) -> $$v"; \
-	echo "next: add a '## $$v' section to CHANGELOG.md, then git commit -am 'release: $$v' && git push"
+	echo "next: rename '## Unreleased' in CHANGELOG.md to '## $$v', then git commit -am 'release: $$v' && git push"
 
 up:               ## Build (if needed) + start docshot (Gotenberg inside)
 	DOCSHOT_VERSION=$(VERSION) $(COMPOSE) up -d --build
