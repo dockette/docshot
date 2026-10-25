@@ -80,6 +80,9 @@ jobs:
       - name: Render a page
         run: make smoke DOCKER_IMAGE=dockette/docshot:test
 
+      - name: Check HTML isolation
+        run: make test-isolation DOCKER_IMAGE=dockette/docshot:test
+
       # Informational: the base image (LibreOffice, Chromium) carries CVEs we cannot fix here;
       # the weekly rebuild picks up upstream fixes. Pinned by digest: scanners are a supply-chain target too.
       - name: Scan image (Trivy)
