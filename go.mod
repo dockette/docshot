@@ -5,7 +5,7 @@ go 1.27.3
 require (
 	github.com/gen2brain/webp v0.6.4
 	github.com/klippa-app/go-pdfium v1.21.3
-	github.com/minio/minio-go/v7 v7.3.0
+	github.com/minio/minio-go/v7 v7.4.1
 	github.com/prometheus/client_golang v1.25.0
 	github.com/richardlehane/mscfb v1.0.9
 	github.com/yuin/goldmark v1.8.6
