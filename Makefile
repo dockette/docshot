@@ -2,7 +2,7 @@
 # Override COMPOSE if your user needs sudo: make up COMPOSE="sudo docker compose"
 COMPOSE ?= docker compose
 DOCKER_IMAGE ?= dockette/docshot:latest
-VERSION := $(shell cat VERSION)
+include VERSION
 
 .DEFAULT_GOAL := up
 .PHONY: test-formats build run up down restart logs ps validate test test-params test-all formats test-unit lint smoke test-isolation version release
@@ -36,16 +36,11 @@ test-isolation:   ## Untrusted HTML: no JavaScript, no remote fetches (starts ${
 version:          ## Print VERSION
 	@echo $(VERSION)
 
-# Sets VERSION to today's date (UTC), YYYY.MM.DD — or YYYY.MM.DD.N when that
-# date is already released (tagged). Commit and push to master to publish:
-# CI then pushes the <VERSION> image and creates the GitHub release.
-release:          ## Set VERSION to today's date (see README → Versions)
-	@git fetch -q --tags origin 2>/dev/null || true; \
-	v=$$(date -u +%Y.%m.%d); n=0; \
-	while git rev-parse -q --verify "refs/tags/$$v" >/dev/null; do n=$$((n+1)); v=$$(date -u +%Y.%m.%d).$$n; done; \
-	echo "$$v" > VERSION; \
-	echo "VERSION: $(VERSION) -> $$v"; \
-	echo "next: rename '## Unreleased' in CHANGELOG.md to '## $$v', then git commit -am 'release: $$v' && git push"
+# Sets VERSION to today's date (UTC). Commit and push to master to publish:
+# CI then pushes the latest and <VERSION> images and creates the GitHub release.
+release:          ## Set VERSION to today's date
+	@sed -i.bak "s/^VERSION=.*/VERSION=$$(date -u +%Y.%m.%d)/" VERSION && rm VERSION.bak
+	@cat VERSION
 
 up:               ## Build (if needed) + start docshot (Gotenberg inside)
 	DOCSHOT_VERSION=$(VERSION) $(COMPOSE) up -d --build
