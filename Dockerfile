@@ -49,6 +49,26 @@ RUN apt-get update \
 
 COPY --from=build /docshot /usr/bin/docshot
 
+# Chromium phones home on its own (Optimization Guide, component updates, Gaia
+# ListAccounts, network time...). Gotenberg's proxy blocks it, but the attempts still
+# show up in network logs. The wrapper therefore:
+# - skips Debian's /usr/bin/chromium launcher (it loads Google API keys, remote extensions),
+# - points the Gaia and component-updater URLs at a closed loopback port,
+# - appends the features to switch off to Gotenberg's own --disable-features
+#   (Chromium honours only the last one).
+RUN printf '%s\n' '#!/bin/sh' \
+      'off=OptimizationHints,OptimizationGuideModelDownloading,OptimizationHintsFetching,OptimizationTargetPrediction,OptimizationGuideOnDeviceModel,Translate,MediaRouter,CertificateTransparencyComponentUpdater,SigninInterceptBubble,SyncPromo,DiscoverFeed,AutofillServerCommunication,NetworkTimeServiceQuerying' \
+      'for a; do shift; case "$a" in --disable-features=*) a="$a,$off"; seen=1;; esac; set -- "$@" "$a"; done' \
+      '[ -n "$seen" ] || set -- "$@" "--disable-features=$off"' \
+      'export GOOGLE_API_KEY=no GOOGLE_DEFAULT_CLIENT_ID=no GOOGLE_DEFAULT_CLIENT_SECRET=no' \
+      'exec /usr/lib/chromium/chromium --media-router=0 --disable-pings --disable-background-networking \' \
+      '  --disable-component-update --disable-sync --disable-domain-reliability --no-pings \' \
+      '  --no-default-browser-check --disable-client-side-phishing-detection --disable-default-apps \' \
+      '  --metrics-recording-only --disable-component-extensions-with-background-pages \' \
+      '  --gaia-url=http://127.0.0.1:9 --component-updater=url-source=http://127.0.0.1:9/ "$@"' \
+      > /usr/local/bin/chromium-offline \
+ && chmod 755 /usr/local/bin/chromium-offline
+
 USER gotenberg
 
 
@@ -79,7 +99,7 @@ ENV PATH=/opt/java/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/
     OTEL_TRACES_EXPORTER=none \
     OTEL_METRICS_EXPORTER=none \
     OTEL_LOGS_EXPORTER=none \
-    CHROMIUM_BIN_PATH=/usr/bin/chromium \
+    CHROMIUM_BIN_PATH=/usr/local/bin/chromium-offline \
     CHROMIUM_HYPHEN_DATA_DIR_PATH=/opt/gotenberg/chromium-hyphen-data \
     LIBREOFFICE_BIN_PATH=/usr/lib/libreoffice/program/soffice.bin \
     UNOCONVERTER_BIN_PATH=/usr/bin/unoconverter
